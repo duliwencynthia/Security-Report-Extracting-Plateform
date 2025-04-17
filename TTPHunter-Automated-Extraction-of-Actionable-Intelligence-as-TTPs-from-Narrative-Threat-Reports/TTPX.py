@@ -105,7 +105,7 @@ def evaluate_model(model, val_loader):
     return acc, precision, recall, f1, total_fp
 
 # K-Fold Cross Validation
-def cross_validate(texts, labels, k=5, epochs=3, batch_size=8):
+def cross_validate(texts, labels, k=5, epochs=20, batch_size=8):
     # print(labels)
     # print(len(labels))
     kfold = KFold(n_splits=k, shuffle=True, random_state=42)
