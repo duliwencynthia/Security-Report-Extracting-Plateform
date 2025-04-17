@@ -171,7 +171,7 @@ num_labels = len(set(labels_id))
 config = RobertaConfig.from_pretrained("nanda-rani/TTPXHunter")
 config.num_labels = num_labels  # Explicitly override
 
-model = Roberta ForSequenceClassification.from_pretrained(
+model = RobertaForSequenceClassification.from_pretrained(
     "nanda-rani/TTPXHunter",
     config=config,
     ignore_mismatched_sizes=True
