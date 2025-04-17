@@ -13,6 +13,8 @@ from transformers import RobertaConfig, RobertaModel
 import torch.nn as nn
 import json
 
+os.environ["CUDA_LAUNCH_BLOCKING"] = "1"
+
 # Set device
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
