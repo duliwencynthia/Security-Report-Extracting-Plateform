@@ -2,6 +2,8 @@
 set -e  # Exit immediately on error
 
 echo "[1/5] Creating virtual environment..."
+sudo apt update
+sudo apt install python3-pip python3-venv
 python3 -m venv venv
 
 echo "[2/5] Activating virtual environment..."
