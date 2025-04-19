@@ -119,6 +119,9 @@ def cross_validate(texts, labels, k=5, epochs=20, batch_size=8):
         train_labels = [labels[i] for i in train_idx]
         val_texts = [texts[i] for i in val_idx]
         val_labels = [labels[i] for i in val_idx]
+        
+        print("Train labels:", set(train_labels))
+        print("New data labels:", set(val_labels))
 
         train_dataset = TextDataset(train_texts, train_labels)
         val_dataset = TextDataset(val_texts, val_labels)
