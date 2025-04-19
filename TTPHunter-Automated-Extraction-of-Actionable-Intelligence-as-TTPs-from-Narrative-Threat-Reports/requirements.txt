@@ -1,4 +1,4 @@
-torch==2.2.0          # or version that matches your system and GPU/CPU
+torch          # or version that matches your system and GPU/CPU
 transformers==4.38.0
 scikit-learn==1.3.0
 pandas==2.0.2
