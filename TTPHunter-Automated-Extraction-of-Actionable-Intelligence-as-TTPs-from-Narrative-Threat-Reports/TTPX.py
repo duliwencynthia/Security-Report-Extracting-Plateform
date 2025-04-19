@@ -104,7 +104,7 @@ def evaluate_model(model, val_loader):
     fp = cm.sum(axis=0) - np.diag(cm)  # false positives per class
     total_fp = fp.sum()  # total false positives
 
-    return acc, precision, recall, f1, total_fp
+    return acc, precision, recall, f1, total_fp, preds
 
 # K-Fold Cross Validation
 def cross_validate(texts, labels, k=5, epochs=20, batch_size=8):
@@ -145,9 +145,13 @@ def cross_validate(texts, labels, k=5, epochs=20, batch_size=8):
             print(f"Epoch {epoch+1}/{epochs}")
             train_model(model, train_loader, optimizer)
 
-        acc, precision, recall, f1, total_fp = evaluate_model(model, val_loader)
+        acc, precision, recall, f1, total_fp, preds = evaluate_model(model, val_loader)
         print(f"✅ Accuracy: {acc:.4f}, Precision: {precision:.4f}, Recall: {recall:.4f}, F1: {f1:.4f}, FP: {total_fp}")
         fold_results.append((acc, precision, recall, f1))
+
+        cm = confusion_matrix(labels, preds)
+        sns.heatmap(cm, annot=True, fmt='d')
+        plt.savefig(f"my_plot_{fold}.png")
 
     return fold_results
 
@@ -199,8 +203,6 @@ print(f"Precision: {avg_metrics[1]:.4f}")
 print(f"Recall: {avg_metrics[2]:.4f}")
 print(f"F1 Score: {avg_metrics[3]:.4f}")
 
-cm = confusion_matrix(labels, preds)
-sns.heatmap(cm, annot=True, fmt='d')
-plt.show()
+
 
 
