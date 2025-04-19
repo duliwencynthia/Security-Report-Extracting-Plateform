@@ -115,7 +115,7 @@ def cross_validate(texts, labels, k=5, epochs=20, batch_size=8):
     fold_results = []
 
     for fold, (train_idx, val_idx) in enumerate(kfold.split(texts)):
-        print(f"\n🧪 Fold {fold+1}/{k}")
+        print(f"\nFold {fold+1}/{k}")
         train_texts = [texts[i] for i in train_idx]
         train_labels = [labels[i] for i in train_idx]
         val_texts = [texts[i] for i in val_idx]
