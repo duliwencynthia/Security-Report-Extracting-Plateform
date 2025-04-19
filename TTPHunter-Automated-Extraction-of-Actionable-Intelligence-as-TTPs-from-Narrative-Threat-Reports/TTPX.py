@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 from transformers import RobertaTokenizer, RobertaForSequenceClassification
 import pickle
 import torch
