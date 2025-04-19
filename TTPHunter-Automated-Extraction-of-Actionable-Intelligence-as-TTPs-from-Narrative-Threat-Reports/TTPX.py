@@ -147,7 +147,7 @@ def cross_validate(texts, labels, k=5, epochs=20, batch_size=8):
             train_model(model, train_loader, optimizer)
 
         acc, precision, recall, f1, total_fp, preds = evaluate_model(model, val_loader)
-        print(f"✅ Accuracy: {acc:.4f}, Precision: {precision:.4f}, Recall: {recall:.4f}, F1: {f1:.4f}, FP: {total_fp}")
+        print(f"✅ Accuracy: {acc:.4f}, Precision: {precision:.4f}, Recall: {recall:.4f}, F1: {f1:.4f}, FP: {total_fp}, pred: {preds}")
         fold_results.append((acc, precision, recall, f1))
 
         cm = confusion_matrix(labels, preds)
