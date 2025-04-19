@@ -12,6 +12,8 @@ from tqdm import tqdm
 from transformers import RobertaConfig, RobertaModel
 import torch.nn as nn
 import json
+import seaborn as sns
+import matplotlib.pyplot as plt
 
 os.environ["CUDA_LAUNCH_BLOCKING"] = "1"
 
@@ -194,6 +196,8 @@ print(f"Precision: {avg_metrics[1]:.4f}")
 print(f"Recall: {avg_metrics[2]:.4f}")
 print(f"F1 Score: {avg_metrics[3]:.4f}")
 
-
+cm = confusion_matrix(labels, preds)
+sns.heatmap(cm, annot=True, fmt='d')
+plt.show()
 
 
