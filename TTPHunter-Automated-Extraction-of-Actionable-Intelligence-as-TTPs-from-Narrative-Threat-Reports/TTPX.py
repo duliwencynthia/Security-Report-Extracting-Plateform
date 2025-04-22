@@ -15,6 +15,7 @@ import torch.nn as nn
 import json
 import seaborn as sns
 import matplotlib.pyplot as plt
+import ast
 
 os.environ["CUDA_LAUNCH_BLOCKING"] = "1"
 
@@ -161,6 +162,8 @@ with open('label_dict.pkl', 'rb') as file:
 
 df_train = pd.DataFrame(pd.read_csv('../unique_train_df.csv'))
 df_test = pd.DataFrame(pd.read_csv('../unique_train_df.csv'))
+df_train["cats"] = df_train["cats"].apply(ast.literal_eval)
+df_test["cats"] = df_test["cats"].apply(ast.literal_eval)
 
 sentences = df_train["text"].tolist() + df_test["text"].tolist()
 labels = []
