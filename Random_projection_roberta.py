@@ -315,8 +315,12 @@ if __name__ == "__main__":
     with open('label_dict.pkl', 'rb') as file:
         labels_dic = pickle.load(file)
 
-    df_train = pd.DataFrame(pd.read_csv('unique_train_df.csv'))
-    df_test = pd.DataFrame((pd.read_csv('unique_train_df.csv'))
+    df_train = pd.DataFrame(pd.read_csv('../unique_train_df.csv'))
+    df_test = pd.DataFrame(pd.read_csv('../unique_train_df.csv'))
+    df_train["cats"] = df_train["cats"].apply(ast.literal_eval)
+    df_test["cats"] = df_test["cats"].apply(ast.literal_eval)
+    df_train["text"] = df_train["text"].apply(lambda x: ' '.join(map(str, x.tolist())) if isinstance(x, pd.Series) else str(x))
+    df_test["text"] = df_test["text"].apply(lambda x: ' '.join(map(str, x.tolist())) if isinstance(x, pd.Series) else str(x))
 
     sentences = df_train["text"].tolist() + df_test["text"].tolist()
     labels = []
