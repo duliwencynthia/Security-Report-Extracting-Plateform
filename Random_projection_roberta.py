@@ -315,8 +315,8 @@ if __name__ == "__main__":
     with open('label_dict.pkl', 'rb') as file:
         labels_dic = pickle.load(file)
 
-    df_train = pd.read_csv('unique_train_df.csv')
-    df_test = pd.read_csv('unique_train_df.csv')
+    df_train = pd.DataFrame(pd.read_csv('unique_train_df.csv'))
+    df_test = pd.DataFrame((pd.read_csv('unique_train_df.csv'))
 
     sentences = df_train["text"].tolist() + df_test["text"].tolist()
     labels = []
