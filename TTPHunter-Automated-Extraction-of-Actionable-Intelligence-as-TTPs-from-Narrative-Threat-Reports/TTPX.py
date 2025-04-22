@@ -159,10 +159,10 @@ def cross_validate(texts, labels, k=5, epochs=20, batch_size=8):
 with open('label_dict.pkl', 'rb') as file:
     labels_dic = pickle.load(file)
 
-df_train = pd.read_json('train.jsonl', lines=True)
-df_test = pd.read_json('test.jsonl', lines=True)
+df_train = pd.read_csv('../unique_train_df.csv')
+df_test = pd.read_csv('../unique_train_df.csv')
 
-sentences = df_train["text"].tolist()
+sentences = df_train["text"].tolist() + df_test["text"].tolist()
 labels = []
 for _,va in df_train["cats"].items():
     for k,v in va.items():
