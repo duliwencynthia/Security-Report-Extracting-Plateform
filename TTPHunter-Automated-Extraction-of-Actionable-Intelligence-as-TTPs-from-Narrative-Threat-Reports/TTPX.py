@@ -374,7 +374,7 @@ if __name__ == "__main__":
         sentences,
         labels_id,
         k=5,
-        epochs=20,
+        epochs=100,
         batch_size=8,
         patience=3,
         checkpoint_dir="model_checkpoints"
