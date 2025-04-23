@@ -157,7 +157,7 @@ def cross_validate(texts, labels, k=5, epochs=20, batch_size=8):
 
     return fold_results
 
-with open('label_dict.pkl', 'rb') as file:
+with open('../label_dict.pkl', 'rb') as file:
     labels_dic = pickle.load(file)
 
 df_train = pd.DataFrame(pd.read_csv('../unique_train_df.csv'))
