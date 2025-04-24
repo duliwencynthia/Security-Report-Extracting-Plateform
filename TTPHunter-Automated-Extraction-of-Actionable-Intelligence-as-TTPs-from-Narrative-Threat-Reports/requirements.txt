@@ -6,3 +6,5 @@ numpy==1.24.4
 tqdm==4.66.2
 seaborn
 matplotlib
+imblearn
+ast
