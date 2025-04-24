@@ -13,6 +13,7 @@ from transformers.modeling_outputs import SequenceClassifierOutput
 from imblearn.over_sampling import SMOTE
 from collections import Counter
 import time
+import ast
 
 # Set device
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")

@@ -12,6 +12,7 @@ import torch.nn as nn
 from transformers.modeling_outputs import SequenceClassifierOutput
 from sklearn.random_projection import GaussianRandomProjection
 import time
+import ast
 
 # Set device
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
