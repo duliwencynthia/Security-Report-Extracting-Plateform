@@ -155,8 +155,8 @@ def find_optimal_projection_dim(texts, labels, projection_dims=[64, 128, 256, 38
     val_dataset = TextDataset(val_texts, val_labels)
 
     # Dataloaders
-    train_loader = DataLoader(train_dataset, batch_size=8, shuffle=True)
-    val_loader = DataLoader(val_dataset, batch_size=8)
+    train_loader = DataLoader(train_dataset, batch_size=32, shuffle=True)
+    val_loader = DataLoader(val_dataset, batch_size=32)
 
     # Time for feature extraction
     feature_start = time.time()
@@ -247,7 +247,7 @@ def find_optimal_projection_dim(texts, labels, projection_dims=[64, 128, 256, 38
 
 
 # K-Fold Cross Validation with Random Projection
-def cross_validate_with_projection(texts, labels, projection_dim=256, k=5, epochs=3, batch_size=8):
+def cross_validate_with_projection(texts, labels, projection_dim=256, k=5, epochs=20, batch_size=32):
     kfold = KFold(n_splits=k, shuffle=True, random_state=42)
     fold_results = []
     fold_times = []
