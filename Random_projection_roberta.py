@@ -247,7 +247,7 @@ def find_optimal_projection_dim(texts, labels, projection_dims=[64, 128, 256, 38
 
 
 # K-Fold Cross Validation with Random Projection
-def cross_validate_with_projection(texts, labels, projection_dim=256, k=5, epochs=20, batch_size=32):
+def cross_validate_with_projection(texts, labels, projection_dim=256, k=5, epochs=50, batch_size=32):
     kfold = KFold(n_splits=k, shuffle=True, random_state=42)
     fold_results = []
     fold_times = []

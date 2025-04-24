@@ -68,7 +68,7 @@ class TextDataset(Dataset):
 
 
 # Modified training function that applies SMOTE before each epoch with time measurement
-def train_model_with_smote(model, train_texts, train_labels, batch_size, optimizer, epochs=20):
+def train_model_with_smote(model, train_texts, train_labels, batch_size, optimizer, epochs=50):
     model.train()
 
     # Create initial dataset
@@ -205,7 +205,7 @@ def evaluate_model(model, val_loader):
 
 
 # K-Fold Cross Validation with SMOTE and time measurement
-def cross_validate_with_smote(texts, labels, k=5, epochs=20, batch_size=32):
+def cross_validate_with_smote(texts, labels, k=5, epochs=50, batch_size=32):
     kfold = KFold(n_splits=k, shuffle=True, random_state=42)
     fold_results = []
     fold_times = []

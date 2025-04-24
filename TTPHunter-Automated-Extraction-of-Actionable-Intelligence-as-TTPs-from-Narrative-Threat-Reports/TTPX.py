@@ -134,7 +134,7 @@ def save_checkpoint(model, optimizer, epoch, fold, metrics, checkpoint_dir="chec
 
 
 # K-Fold Cross Validation with fine-tuning and time tracking
-def cross_validate(texts, labels, k=5, epochs=100, batch_size=32, patience=3, checkpoint_dir="checkpoints"):
+def cross_validate(texts, labels, k=5, epochs=50, batch_size=32, patience=3, checkpoint_dir="checkpoints"):
     kfold = KFold(n_splits=k, shuffle=True, random_state=42)
     fold_results = []
     training_times = []
@@ -374,7 +374,7 @@ if __name__ == "__main__":
         sentences,
         labels_id,
         k=5,
-        epochs=100,
+        epochs=50,
         batch_size=32,
         patience=3,
         checkpoint_dir="model_checkpoints"
