@@ -15,16 +15,33 @@ import json
 import seaborn as sns
 import matplotlib.pyplot as plt
 import ast
-import time  # Added for time measurement
+import time
+import sys
+import logging
+from datetime import timedelta, datetime
+from transformers.modeling_outputs import SequenceClassifierOutput
+
+# Configure logging
+log_filename = f"training_log_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log"
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.FileHandler(log_filename),
+        logging.StreamHandler(sys.stdout)
+    ]
+)
+logger = logging.getLogger(__name__)
 
 os.environ["CUDA_LAUNCH_BLOCKING"] = "1"
 
 # Set device
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-print(f"Using device: {device}")
+logger.info(f"Using device: {device}")
 
-# Load tokenizer
-tokenizer = RobertaTokenizer.from_pretrained("nanda-rani/TTPXHunter")
+# Load RoBERTa base tokenizer
+logger.info("Loading RoBERTa base tokenizer...")
+tokenizer = RobertaTokenizer.from_pretrained("roberta-base")
 
 
 class CustomRobertaClassifier(nn.Module):
@@ -65,25 +82,35 @@ class TextDataset(Dataset):
         return len(self.labels)
 
 
-# Training function with time measurement
-def train_model(model, train_loader, optimizer):
+# Training function with batch-level loss logging
+def train_model(model, train_loader, optimizer, scheduler=None):
     model.train()
     total_loss = 0
-    start_time = time.time()
+    num_batches = len(train_loader)
 
-    for batch in tqdm(train_loader, desc="Training"):
+    # For logging batch-level loss
+    log_interval = max(1, num_batches // 10)  # Log approximately 10 times per epoch
+
+    for batch_idx, batch in enumerate(tqdm(train_loader, desc="Training")):
         batch = {k: v.to(device) for k, v in batch.items()}
         outputs = model(**batch)
         loss = outputs.loss
-        total_loss += loss.item()
+        batch_loss = loss.item()
+        total_loss += batch_loss
+
+        # Log batch-level loss
+        if (batch_idx + 1) % log_interval == 0 or batch_idx == 0 or batch_idx == num_batches - 1:
+            logger.info(f"  Batch {batch_idx + 1}/{num_batches} - Loss: {batch_loss:.6f}")
 
         loss.backward()
         optimizer.step()
+        if scheduler:
+            scheduler.step()
         optimizer.zero_grad()
 
-    elapsed_time = time.time() - start_time
-    avg_loss = total_loss / len(train_loader)
-    return avg_loss, elapsed_time
+    avg_loss = total_loss / num_batches
+    logger.info(f"Average training loss: {avg_loss:.6f}")
+    return avg_loss
 
 
 # Evaluation function
@@ -91,21 +118,23 @@ def evaluate_model(model, val_loader):
     model.eval()
     preds, labels = [], []
     total_loss = 0
-    start_time = time.time()
+    num_batches = len(val_loader)
 
     with torch.no_grad():
         for batch in tqdm(val_loader, desc="Evaluating"):
             batch = {k: v.to(device) for k, v in batch.items()}
             outputs = model(**batch)
             logits = outputs.logits
-
-            if outputs.loss is not None:
-                total_loss += outputs.loss.item()
+            loss = outputs.loss
+            batch_loss = loss.item()
+            total_loss += batch_loss
 
             preds += torch.argmax(logits, dim=1).cpu().tolist()
             labels += batch["labels"].cpu().tolist()
 
-    elapsed_time = time.time() - start_time
+    avg_loss = total_loss / num_batches
+    logger.info(f"Average validation loss: {avg_loss:.6f}")
+
     acc = accuracy_score(labels, preds)
     precision, recall, f1, _ = precision_recall_fscore_support(labels, preds, average="weighted")
 
@@ -114,51 +143,61 @@ def evaluate_model(model, val_loader):
     fp = cm.sum(axis=0) - np.diag(cm)  # false positives per class
     total_fp = fp.sum()  # total false positives
 
-    return acc, precision, recall, f1, total_fp, preds, total_loss / len(val_loader), elapsed_time
+    return acc, precision, recall, f1, total_fp, preds, avg_loss
 
 
-# Function to save model checkpoints
-def save_checkpoint(model, optimizer, epoch, fold, metrics, checkpoint_dir="checkpoints"):
-    os.makedirs(checkpoint_dir, exist_ok=True)
-    checkpoint_path = os.path.join(checkpoint_dir, f"model_fold{fold}_epoch{epoch}.pt")
+# Save model function
+def save_model(model, tokenizer, fold, metrics, output_dir="saved_models"):
+    if not os.path.exists(output_dir):
+        os.makedirs(output_dir)
 
+    # Create fold-specific directory
+    fold_dir = os.path.join(output_dir, f"fold_{fold}")
+    if not os.path.exists(fold_dir):
+        os.makedirs(fold_dir)
+
+    # Save model
     torch.save({
         'model_state_dict': model.state_dict(),
-        'optimizer_state_dict': optimizer.state_dict(),
-        'epoch': epoch,
         'metrics': metrics
-    }, checkpoint_path)
+    }, os.path.join(fold_dir, "model.pt"))
 
-    print(f"Checkpoint saved to {checkpoint_path}")
-    return checkpoint_path
+    # Save tokenizer
+    tokenizer.save_pretrained(fold_dir)
+
+    # Save metrics
+    with open(os.path.join(fold_dir, "metrics.json"), "w") as f:
+        json.dump(metrics, f)
+
+    logger.info(f"Model and metrics saved to {fold_dir}")
 
 
-# K-Fold Cross Validation with fine-tuning and time tracking
-def cross_validate(texts, labels, k=5, epochs=50, batch_size=32, patience=3, checkpoint_dir="checkpoints"):
+# K-Fold Cross Validation with time tracking and learning rate scheduler
+def cross_validate(texts, labels, k=5, epochs=20, batch_size=8, learning_rate=5e-5):
     kfold = KFold(n_splits=k, shuffle=True, random_state=42)
     fold_results = []
-    training_times = []
+    fold_times = []
+    fold_metrics = []
 
-    # Create a DataFrame to store all training metrics
-    training_metrics = pd.DataFrame(columns=[
-        'fold', 'epoch', 'train_loss', 'val_loss', 'accuracy',
-        'precision', 'recall', 'f1', 'false_positives',
-        'training_time', 'eval_time'
-    ])
+    # For storing detailed training metrics
+    training_history = {}
 
     for fold, (train_idx, val_idx) in enumerate(kfold.split(texts)):
-        print(f"\n{'=' * 50}")
-        print(f"Fold {fold + 1}/{k}")
-        print(f"{'=' * 50}")
+        logger.info(f"\n{'=' * 50}")
+        logger.info(f"Fold {fold + 1}/{k}")
+        logger.info(f"{'=' * 50}")
+
+        fold_start_time = time.time()
 
         train_texts = [texts[i] for i in train_idx]
         train_labels = [labels[i] for i in train_idx]
         val_texts = [texts[i] for i in val_idx]
         val_labels = [labels[i] for i in val_idx]
 
-        print(f"Train set size: {len(train_texts)}, Validation set size: {len(val_texts)}")
-        print(f"Train labels distribution: {np.bincount(train_labels)}")
-        print(f"Validation labels distribution: {np.bincount(val_labels)}")
+        logger.info(f"Training set size: {len(train_texts)}")
+        logger.info(f"Validation set size: {len(val_texts)}")
+        logger.info(f"Train labels distribution: {np.bincount(train_labels)}")
+        logger.info(f"Validation labels distribution: {np.bincount(val_labels)}")
 
         train_dataset = TextDataset(train_texts, train_labels)
         val_dataset = TextDataset(val_texts, val_labels)
@@ -166,251 +205,328 @@ def cross_validate(texts, labels, k=5, epochs=50, batch_size=32, patience=3, che
         train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
         val_loader = DataLoader(val_dataset, batch_size=batch_size)
 
-        # Initialize model
-        config = RobertaConfig.from_pretrained("nanda-rani/TTPXHunter")
-        num_labels = max(labels) + 1
-        config.num_labels = num_labels
-
-        base_model = RobertaModel.from_pretrained("nanda-rani/TTPXHunter")
-        model = CustomRobertaClassifier(base_model, hidden_size=768, num_labels=num_labels)
+        # Model initialization - using RoBERTa base
+        logger.info("Initializing RoBERTa base model...")
+        base_model = RobertaModel.from_pretrained("roberta-base")
+        model = CustomRobertaClassifier(base_model, hidden_size=768, num_labels=max(labels) + 1)
         model.to(device)
 
-        optimizer = AdamW(model.parameters(), lr=5e-5)
+        # Create optimizer with weight decay
+        optimizer = AdamW(model.parameters(), lr=learning_rate, weight_decay=0.01)
 
-        # For early stopping
-        best_f1 = 0
-        no_improvement = 0
-        best_checkpoint_path = None
-        fold_start_time = time.time()
+        # Learning rate scheduler
+        total_steps = len(train_loader) * epochs
+        scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=total_steps)
+
+        # For tracking metrics
+        fold_history = {
+            "train_loss": [],
+            "val_loss": [],
+            "accuracy": [],
+            "precision": [],
+            "recall": [],
+            "f1": [],
+            "epoch_times": []
+        }
+
+        # Training loop
+        best_val_f1 = 0
+        best_model_state = None
 
         for epoch in range(epochs):
-            print(f"\nEpoch {epoch + 1}/{epochs}")
+            epoch_start = time.time()
+            logger.info(f"\nEpoch {epoch + 1}/{epochs}")
 
             # Train
-            train_loss, train_time = train_model(model, train_loader, optimizer)
-            print(f"Training loss: {train_loss:.4f}, Time: {train_time:.2f}s")
+            train_loss = train_model(model, train_loader, optimizer, scheduler)
 
             # Evaluate
-            acc, precision, recall, f1, total_fp, preds, val_loss, eval_time = evaluate_model(model, val_loader)
-            print(
-                f"Validation - Loss: {val_loss:.4f}, Accuracy: {acc:.4f}, Precision: {precision:.4f}, Recall: {recall:.4f}, F1: {f1:.4f}, FP: {total_fp}")
-            print(f"Evaluation time: {eval_time:.2f}s")
+            acc, precision, recall, f1, total_fp, preds, val_loss = evaluate_model(model, val_loader)
 
-            # Save metrics
-            metrics_row = {
-                'fold': fold + 1,
-                'epoch': epoch + 1,
-                'train_loss': train_loss,
-                'val_loss': val_loss,
-                'accuracy': acc,
-                'precision': precision,
-                'recall': recall,
-                'f1': f1,
-                'false_positives': total_fp,
-                'training_time': train_time,
-                'eval_time': eval_time
-            }
-            training_metrics = pd.concat([training_metrics, pd.DataFrame([metrics_row])], ignore_index=True)
+            # Record metrics
+            epoch_time = time.time() - epoch_start
+            fold_history["train_loss"].append(train_loss)
+            fold_history["val_loss"].append(val_loss)
+            fold_history["accuracy"].append(acc)
+            fold_history["precision"].append(precision)
+            fold_history["recall"].append(recall)
+            fold_history["f1"].append(f1)
+            fold_history["epoch_times"].append(epoch_time)
 
-            # Save checkpoint if this is the best model so far
-            if f1 > best_f1:
-                best_f1 = f1
-                no_improvement = 0
-                checkpoint_path = save_checkpoint(
-                    model, optimizer, epoch, fold + 1,
-                    {'acc': acc, 'precision': precision, 'recall': recall, 'f1': f1, 'fp': total_fp},
-                    checkpoint_dir
-                )
-                best_checkpoint_path = checkpoint_path
-            else:
-                no_improvement += 1
-                print(f"No improvement for {no_improvement} epochs")
+            # Save best model state
+            if f1 > best_val_f1:
+                best_val_f1 = f1
+                best_model_state = {
+                    "model_state_dict": model.state_dict(),
+                    "optimizer_state_dict": optimizer.state_dict(),
+                    "epoch": epoch,
+                    "metrics": {
+                        "accuracy": acc,
+                        "precision": precision,
+                        "recall": recall,
+                        "f1": f1
+                    }
+                }
+                logger.info(f"New best model found! F1: {f1:.4f}")
 
-            # Early stopping
-            if no_improvement >= patience:
-                print(f"Early stopping triggered after {epoch + 1} epochs")
-                break
-
-        # Record the fold's total training time
-        fold_time = time.time() - fold_start_time
-        training_times.append(fold_time)
-        print(f"\nFold {fold + 1} completed in {fold_time:.2f} seconds")
+            # Print epoch results with time
+            logger.info(f"Epoch completed in {timedelta(seconds=epoch_time)}")
+            logger.info(f"Train Loss: {train_loss:.6f}, Val Loss: {val_loss:.6f}")
+            logger.info(f"Accuracy: {acc:.4f}, Precision: {precision:.4f}, Recall: {recall:.4f}, F1: {f1:.4f}")
 
         # Load the best model for final evaluation
-        if best_checkpoint_path:
-            checkpoint = torch.load(best_checkpoint_path)
-            model.load_state_dict(checkpoint['model_state_dict'])
-            print(f"Loaded best model from {best_checkpoint_path}")
+        if best_model_state:
+            model.load_state_dict(best_model_state["model_state_dict"])
+            logger.info(f"\nLoaded best model from epoch {best_model_state['epoch'] + 1}")
 
         # Final evaluation
-        final_acc, final_precision, final_recall, final_f1, final_fp, final_preds, _, _ = evaluate_model(model,
-                                                                                                         val_loader)
-        print(f"\n📊 Final fold {fold + 1} results:")
-        print(
-            f"Accuracy: {final_acc:.4f}, Precision: {final_precision:.4f}, Recall: {final_recall:.4f}, F1: {final_f1:.4f}, FP: {final_fp}")
+        logger.info("\nPerforming final evaluation...")
+        acc, precision, recall, f1, total_fp, preds, val_loss = evaluate_model(model, val_loader)
+        logger.info(f"\n✅ Final Evaluation:")
+        logger.info(
+            f"Accuracy: {acc:.4f}, Precision: {precision:.4f}, Recall: {recall:.4f}, F1: {f1:.4f}, FP: {total_fp}")
 
-        fold_results.append((final_acc, final_precision, final_recall, final_f1, final_fp))
+        # Save best model checkpoint
+        save_model(model, tokenizer, fold, best_model_state["metrics"])
 
-        # Save confusion matrix
-        cm = confusion_matrix(val_labels, final_preds)
-        plt.figure(figsize=(10, 8))
-        sns.heatmap(cm, annot=True, fmt='d', cmap='Blues')
-        plt.title(f'Confusion Matrix - Fold {fold + 1}')
-        plt.ylabel('True Label')
-        plt.xlabel('Predicted Label')
-        plt.savefig(f"confusion_matrix_fold{fold + 1}.png")
+        # Calculate fold time
+        fold_time = time.time() - fold_start_time
+        fold_times.append(fold_time)
+        logger.info(f"Fold completed in {timedelta(seconds=fold_time)}")
+
+        # Store fold results
+        fold_results.append((acc, precision, recall, f1, total_fp))
+        fold_metrics.append(best_model_state["metrics"])
+        training_history[f"fold_{fold + 1}"] = fold_history
+
+        # Plot training curves for this fold
+        logger.info(f"Generating training curves for fold {fold + 1}...")
+        plt.figure(figsize=(12, 10))
+
+        # Loss curves
+        plt.subplot(2, 2, 1)
+        plt.plot(fold_history["train_loss"], label="Train Loss")
+        plt.plot(fold_history["val_loss"], label="Validation Loss")
+        plt.title(f"Fold {fold + 1} Loss Curves")
+        plt.xlabel("Epoch")
+        plt.ylabel("Loss")
+        plt.legend()
+
+        # Accuracy curve
+        plt.subplot(2, 2, 2)
+        plt.plot(fold_history["accuracy"])
+        plt.title(f"Fold {fold + 1} Accuracy")
+        plt.xlabel("Epoch")
+        plt.ylabel("Accuracy")
+
+        # F1 curve
+        plt.subplot(2, 2, 3)
+        plt.plot(fold_history["f1"])
+        plt.title(f"Fold {fold + 1} F1 Score")
+        plt.xlabel("Epoch")
+        plt.ylabel("F1")
+
+        # Precision-Recall curves
+        plt.subplot(2, 2, 4)
+        plt.plot(fold_history["precision"], label="Precision")
+        plt.plot(fold_history["recall"], label="Recall")
+        plt.title(f"Fold {fold + 1} Precision-Recall")
+        plt.xlabel("Epoch")
+        plt.ylabel("Score")
+        plt.legend()
+
+        plt.tight_layout()
+        plt.savefig(f"fold_{fold + 1}_training_curves.png")
         plt.close()
 
-    # Save training metrics to CSV
-    training_metrics.to_csv("training_metrics.csv", index=False)
+        # Generate and save confusion matrix
+        logger.info(f"Generating confusion matrix for fold {fold + 1}...")
+        cm = confusion_matrix(val_labels, preds)
+        plt.figure(figsize=(10, 8))
+        sns.heatmap(cm, annot=True, fmt='d', cmap='Blues')
+        plt.title(f"Fold {fold + 1} Confusion Matrix")
+        plt.xlabel("Predicted Label")
+        plt.ylabel("True Label")
+        plt.savefig(f"fold_{fold + 1}_confusion_matrix.png")
+        plt.close()
 
-    # Calculate average training time
-    avg_train_time = sum(training_times) / len(training_times)
-    print(f"\n⏱️ Average training time per fold: {avg_train_time:.2f} seconds")
+    # Save overall training history
+    with open("training_history.json", "w") as f:
+        json.dump(training_history, f)
+    logger.info("Training history saved to training_history.json")
 
-    # Plot training metrics
-    plot_training_metrics(training_metrics)
-
-    return fold_results, training_metrics, training_times
-
-
-# Plot training metrics
-def plot_training_metrics(metrics_df):
-    # Create a directory for plots
-    os.makedirs("plots", exist_ok=True)
-
-    # Plot training and validation loss
-    plt.figure(figsize=(12, 6))
-    for fold in metrics_df['fold'].unique():
-        fold_data = metrics_df[metrics_df['fold'] == fold]
-        plt.plot(fold_data['epoch'], fold_data['train_loss'], label=f'Fold {fold} - Train Loss')
-        plt.plot(fold_data['epoch'], fold_data['val_loss'], label=f'Fold {fold} - Val Loss', linestyle='--')
-
-    plt.title('Training and Validation Loss per Epoch')
-    plt.xlabel('Epoch')
-    plt.ylabel('Loss')
-    plt.legend()
-    plt.grid(True)
-    plt.savefig("plots/loss_curves.png")
-    plt.close()
-
-    # Plot F1 score
-    plt.figure(figsize=(12, 6))
-    for fold in metrics_df['fold'].unique():
-        fold_data = metrics_df[metrics_df['fold'] == fold]
-        plt.plot(fold_data['epoch'], fold_data['f1'], label=f'Fold {fold} - F1 Score')
-
-    plt.title('F1 Score per Epoch')
-    plt.xlabel('Epoch')
-    plt.ylabel('F1 Score')
-    plt.legend()
-    plt.grid(True)
-    plt.savefig("plots/f1_curves.png")
-    plt.close()
-
-    # Plot training time per epoch
-    plt.figure(figsize=(12, 6))
-    for fold in metrics_df['fold'].unique():
-        fold_data = metrics_df[metrics_df['fold'] == fold]
-        plt.plot(fold_data['epoch'], fold_data['training_time'], label=f'Fold {fold}')
-
-    plt.title('Training Time per Epoch')
-    plt.xlabel('Epoch')
-    plt.ylabel('Time (seconds)')
-    plt.legend()
-    plt.grid(True)
-    plt.savefig("plots/training_time.png")
-    plt.close()
+    # Return complete results
+    return fold_results, fold_times, fold_metrics, training_history
 
 
-# Add SequenceClassifierOutput if not imported
-from transformers.modeling_outputs import SequenceClassifierOutput
-
-# Main code
+# Main execution
 if __name__ == "__main__":
-    # Start timing the entire process
-    total_start_time = time.time()
+    logger.info("=" * 80)
+    logger.info("STARTING ROBERTA-BASE TRAINING PROCESS")
+    logger.info("=" * 80)
+    logger.info(f"Start time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    logger.info(f"Log file: {log_filename}")
 
-    # Load label dictionary
-    with open('../label_dict.pkl', 'rb') as file:
-        labels_dic = pickle.load(file)
+    logger.info("Loading data...")
 
-    # Load data
-    df_train = pd.DataFrame(pd.read_csv('../unique_train_df.csv'))
-    df_test = pd.DataFrame(pd.read_csv('../unique_train_df.csv'))
+    try:
+        # Load label dictionary
+        with open('../label_dict.pkl', 'rb') as file:
+            labels_dic = pickle.load(file)
+        logger.info("Label dictionary loaded successfully")
 
-    # Process data
-    df_train["cats"] = df_train["cats"].apply(ast.literal_eval)
-    df_test["cats"] = df_test["cats"].apply(ast.literal_eval)
-    df_train["text"] = df_train["text"].apply(
-        lambda x: ' '.join(map(str, x.tolist())) if isinstance(x, pd.Series) else str(x))
-    df_test["text"] = df_test["text"].apply(
-        lambda x: ' '.join(map(str, x.tolist())) if isinstance(x, pd.Series) else str(x))
+        # Load datasets
+        df_train = pd.DataFrame(pd.read_csv('../unique_train_df.csv'))
+        df_test = pd.DataFrame(pd.read_csv('../unique_train_df.csv'))
+        logger.info("CSV data loaded successfully")
 
-    # Combine sentences and labels
-    sentences = df_train["text"].tolist() + df_test["text"].tolist()
-    labels = []
+        df_train["cats"] = df_train["cats"].apply(ast.literal_eval)
+        df_test["cats"] = df_test["cats"].apply(ast.literal_eval)
+        df_train["text"] = df_train["text"].apply(
+            lambda x: ' '.join(map(str, x.tolist())) if isinstance(x, pd.Series) else str(x))
+        df_test["text"] = df_test["text"].apply(
+            lambda x: ' '.join(map(str, x.tolist())) if isinstance(x, pd.Series) else str(x))
+        logger.info("Data preprocessing completed")
 
-    for _, va in df_train["cats"].items():
-        for k, v in va.items():
-            if v == 1.0:
-                labels.append(k)
-    for _, va in df_test["cats"].items():
-        for k, v in va.items():
-            if v == 1.0:
-                labels.append(k)
+        # Prepare data
+        sentences = df_train["text"].tolist() + df_test["text"].tolist()
+        labels = []
+        for _, va in df_train["cats"].items():
+            for k, v in va.items():
+                if v == 1.0:
+                    labels.append(k)
+        for _, va in df_test["cats"].items():
+            for k, v in va.items():
+                if v == 1.0:
+                    labels.append(k)
 
-    # Map labels to IDs
-    labels_id = []
-    for lb in labels:
-        labels_id.append(labels_dic[lb])
+        # Convert labels to IDs
+        labels_id = []
+        for lb in labels:
+            labels_id.append(labels_dic[lb])
 
-    # Print dataset statistics
-    print(f"Total samples: {len(sentences)}")
-    print(f"Label distribution: {np.bincount(labels_id)}")
+        # Print dataset statistics
+        logger.info(f"Total samples: {len(sentences)}")
+        logger.info(f"Number of unique classes: {len(set(labels_id))}")
+        logger.info(f"Class distribution: {np.bincount(labels_id)}")
 
-    # Run cross-validation with fine-tuning and time tracking
-    results, metrics_df, training_times = cross_validate(
-        sentences,
-        labels_id,
-        k=5,
-        epochs=50,
-        batch_size=32,
-        patience=3,
-        checkpoint_dir="model_checkpoints"
-    )
+        # Set training parameters
+        params = {
+            "k": 5,  # Number of folds
+            "epochs": 20,  # Number of training epochs
+            "batch_size": 8,  # Batch size
+            "learning_rate": 2e-5  # Learning rate (slightly reduced for RoBERTa base)
+        }
+        logger.info(f"Training parameters: {params}")
 
-    # Calculate and print average metrics
-    results_array = np.array(results)
-    avg_metrics = results_array.mean(axis=0)
+        # Start time measurement for the entire process
+        total_start_time = time.time()
 
-    print("\n📈 Average Results:")
-    print(f"Accuracy: {avg_metrics[0]:.4f}")
-    print(f"Precision: {avg_metrics[1]:.4f}")
-    print(f"Recall: {avg_metrics[2]:.4f}")
-    print(f"F1 Score: {avg_metrics[3]:.4f}")
-    print(f"Average False Positives: {avg_metrics[4]:.2f}")
+        # Run cross-validation
+        logger.info(
+            f"\nStarting {params['k']}-fold cross-validation with {params['epochs']} epochs using RoBERTa-base...")
+        results, fold_times, fold_metrics, training_history = cross_validate(
+            sentences,
+            labels_id,
+            k=params["k"],
+            epochs=params["epochs"],
+            batch_size=params["batch_size"],
+            learning_rate=params["learning_rate"]
+        )
 
-    # Calculate total runtime
-    total_time = time.time() - total_start_time
-    hours, remainder = divmod(total_time, 3600)
-    minutes, seconds = divmod(remainder, 60)
+        # Calculate total time
+        total_time = time.time() - total_start_time
 
-    print(f"\n⏱️ Total Runtime: {int(hours)}h {int(minutes)}m {seconds:.2f}s")
-    print(f"Average time per fold: {sum(training_times) / len(training_times):.2f}s")
+        # Calculate average metrics
+        results_array = np.array(results)
+        avg_metrics = results_array.mean(axis=0)
+        std_metrics = results_array.std(axis=0)
 
-    # Save results to file
-    with open("model_results.json", "w") as f:
-        json.dump({
-            "accuracy": float(avg_metrics[0]),
-            "precision": float(avg_metrics[1]),
-            "recall": float(avg_metrics[2]),
-            "f1_score": float(avg_metrics[3]),
-            "false_positives": float(avg_metrics[4]),
-            "total_runtime_seconds": total_time,
-            "training_times_per_fold": training_times
-        }, f, indent=4)
+        # Print overall results
+        logger.info("\n" + "=" * 50)
+        logger.info("🔍 CROSS-VALIDATION RESULTS (RoBERTa-base)")
+        logger.info("=" * 50)
+        logger.info(f"Total training time: {timedelta(seconds=total_time)}")
+        logger.info(f"Average fold time: {timedelta(seconds=np.mean(fold_times))}")
 
-    print("\n✅ Results saved to model_results.json")
+        logger.info("\n📊 PER-FOLD METRICS:")
+        for i, ((acc, prec, rec, f1, fp), time_taken) in enumerate(zip(results, fold_times)):
+            logger.info(
+                f"Fold {i + 1}: Acc={acc:.4f}, Prec={prec:.4f}, Rec={rec:.4f}, F1={f1:.4f}, Time={timedelta(seconds=time_taken)}")
 
+        logger.info("\n📈 AVERAGE RESULTS:")
+        logger.info(f"Accuracy: {avg_metrics[0]:.4f} ± {std_metrics[0]:.4f}")
+        logger.info(f"Precision: {avg_metrics[1]:.4f} ± {std_metrics[1]:.4f}")
+        logger.info(f"Recall: {avg_metrics[2]:.4f} ± {std_metrics[2]:.4f}")
+        logger.info(f"F1 Score: {avg_metrics[3]:.4f} ± {std_metrics[3]:.4f}")
+        logger.info(f"False Positives: {avg_metrics[4]:.1f} ± {std_metrics[4]:.1f}")
 
+        # Plot overall metrics across folds
+        logger.info("Generating final cross-validation metrics visualization...")
+        plt.figure(figsize=(12, 8))
+        metrics = ["Accuracy", "Precision", "Recall", "F1"]
+
+        for i, metric_name in enumerate(metrics):
+            plt.subplot(2, 2, i + 1)
+            values = [result[i] for result in results]
+            plt.bar(range(1, len(values) + 1), values)
+            plt.axhline(y=np.mean(values), color='r', linestyle='-', label=f'Mean: {np.mean(values):.4f}')
+            plt.title(f"{metric_name} across folds")
+            plt.xlabel("Fold")
+            plt.ylabel(metric_name)
+            plt.ylim(0, 1)
+            plt.legend()
+
+        plt.tight_layout()
+        plt.savefig("roberta_base_cross_validation_metrics.png")
+
+        # Save final results to JSON
+        logger.info("Saving final results...")
+        final_results = {
+            "model": "roberta-base",
+            "params": params,
+            "avg_metrics": {
+                "accuracy": float(avg_metrics[0]),
+                "precision": float(avg_metrics[1]),
+                "recall": float(avg_metrics[2]),
+                "f1": float(avg_metrics[3]),
+                "false_positives": float(avg_metrics[4])
+            },
+            "std_metrics": {
+                "accuracy": float(std_metrics[0]),
+                "precision": float(std_metrics[1]),
+                "recall": float(std_metrics[2]),
+                "f1": float(std_metrics[3]),
+                "false_positives": float(std_metrics[4])
+            },
+            "fold_results": [
+                {
+                    "fold": i + 1,
+                    "metrics": {
+                        "accuracy": float(results[i][0]),
+                        "precision": float(results[i][1]),
+                        "recall": float(results[i][2]),
+                        "f1": float(results[i][3]),
+                        "false_positives": int(results[i][4])
+                    },
+                    "time_seconds": float(fold_times[i])
+                }
+                for i in range(len(results))
+            ],
+            "total_time_seconds": float(total_time),
+            "average_fold_time_seconds": float(np.mean(fold_times))
+        }
+
+        with open("roberta_base_results.json", "w") as f:
+            json.dump(final_results, f, indent=2)
+
+        logger.info("\n✅ Results saved to roberta_base_results.json")
+        logger.info("\n🎉 Training and evaluation completed!")
+
+    except Exception as e:
+        logger.exception(f"An error occurred during training: {str(e)}")
+        raise
+
+    finally:
+        logger.info(f"End time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+        logger.info("=" * 80)
