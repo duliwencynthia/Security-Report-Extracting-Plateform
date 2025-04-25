@@ -1,0 +1,31 @@
+Using device: cuda
+Loaded RoBERTa tokenizer
+Starting script execution
+Successfully loaded label dictionary
+Loaded training data with 11097 samples and test data with 11097 samples
+Prepared 22194 sentences with 34002 labels
+Number of unique labels: 120
+
+🔍 Finding optimal projection dimension
+Extracting features from RoBERTa model
+Feature extraction time: 2.21 seconds
+Testing projection dimension: 64
+Projection time for dim 64: 0.0039 seconds
+Classifier training time for dim 64: 21.3936 seconds
+Could not calculate loss for dim 64
+Evaluation time for dim 64: 0.0046 seconds
+Dim 64: Accuracy=0.2600, F1=0.1396, Loss=N/A, Total time=21.4021s
+Testing projection dimension: 128
+Projection time for dim 128: 0.0129 seconds
+Classifier training time for dim 128: 25.9563 seconds
+Could not calculate loss for dim 128
+Evaluation time for dim 128: 0.0698 seconds
+Dim 128: Accuracy=0.2600, F1=0.1378, Loss=N/A, Total time=26.0391s
+Testing projection dimension: 256
+Projection time for dim 256: 0.0077 seconds
+Classifier training time for dim 256: 201.5906 seconds
+Could not calculate loss for dim 256
+Evaluation time for dim 256: 0.0938 seconds
+Dim 256: Accuracy=0.2600, F1=0.1399, Loss=N/A, Total time=201.6921s
+Testing projection dimension: 384
+Projection time for dim 384: 0.0186 seconds
