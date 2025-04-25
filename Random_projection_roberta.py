@@ -117,8 +117,8 @@ def find_optimal_projection_dim(texts, labels, projection_dims=[64, 128, 256, 38
     val_dataset = TextDataset(val_texts, val_labels)
 
     # DataLoaders for encoding
-    train_loader = DataLoader(train_dataset, batch_size=32, shuffle=False)
-    val_loader = DataLoader(val_dataset, batch_size=32)
+    train_loader = DataLoader(train_dataset, batch_size=8, shuffle=False)
+    val_loader = DataLoader(val_dataset, batch_size=8)
 
     # Time for feature extraction
     feature_start = time.time()
@@ -226,7 +226,7 @@ def extract_and_project_features(texts, labels, projection_dim):
 
     # Create dataset for encoding
     text_dataset = TextDataset(texts, labels)
-    loader = DataLoader(text_dataset, batch_size=32, shuffle=False)
+    loader = DataLoader(text_dataset, batch_size=8, shuffle=False)
 
     # Extract features from RoBERTa
     base_model = RobertaModel.from_pretrained("roberta-base")
@@ -349,7 +349,7 @@ def evaluate_projected_model(model, val_loader, epoch=None):
 
 
 # K-Fold Cross Validation with Random Projection Preprocessing
-def cross_validate_with_projection_preprocessing(texts, labels, projection_dim=256, k=5, epochs=50, batch_size=32):
+def cross_validate_with_projection_preprocessing(texts, labels, projection_dim=256, k=5, epochs=10, batch_size=8):
     kfold = KFold(n_splits=k, shuffle=True, random_state=42)
     fold_results = []
     fold_times = []
@@ -526,7 +526,7 @@ if __name__ == "__main__":
     # labels_id = labels_id[:100]
     # epochs = 3
 
-    epochs = 50  # Set to original value for full training
+    epochs = 10  # Set to original value for full training
 
     # Find optimal projection dimension
     # Comment out for faster execution if you want to use a fixed dimension
