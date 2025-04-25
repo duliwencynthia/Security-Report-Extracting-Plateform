@@ -16,31 +16,16 @@ import seaborn as sns
 import matplotlib.pyplot as plt
 import ast
 import time
-import sys
-import logging
-from datetime import timedelta, datetime
+from datetime import timedelta
 from transformers.modeling_outputs import SequenceClassifierOutput
-
-# Configure logging
-log_filename = f"training_log_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log"
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.FileHandler(log_filename),
-        logging.StreamHandler(sys.stdout)
-    ]
-)
-logger = logging.getLogger(__name__)
 
 os.environ["CUDA_LAUNCH_BLOCKING"] = "1"
 
 # Set device
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-logger.info(f"Using device: {device}")
+print(f"Using device: {device}")
 
-# Load RoBERTa base tokenizer
-logger.info("Loading RoBERTa base tokenizer...")
+# Load RoBERTa base tokenizer instead of TTPXHunter
 tokenizer = RobertaTokenizer.from_pretrained("roberta-base")
 
 
@@ -82,14 +67,13 @@ class TextDataset(Dataset):
         return len(self.labels)
 
 
-# Training function with batch-level loss logging
-def train_model(model, train_loader, optimizer, scheduler=None):
+# Training function with detailed loss tracking
+def train_model(model, train_loader, optimizer, scheduler=None, fold=0, epoch=0):
     model.train()
     total_loss = 0
     num_batches = len(train_loader)
-
-    # For logging batch-level loss
-    log_interval = max(1, num_batches // 10)  # Log approximately 10 times per epoch
+    step_losses = []
+    global_step = epoch * num_batches
 
     for batch_idx, batch in enumerate(tqdm(train_loader, desc="Training")):
         batch = {k: v.to(device) for k, v in batch.items()}
@@ -98,9 +82,19 @@ def train_model(model, train_loader, optimizer, scheduler=None):
         batch_loss = loss.item()
         total_loss += batch_loss
 
-        # Log batch-level loss
-        if (batch_idx + 1) % log_interval == 0 or batch_idx == 0 or batch_idx == num_batches - 1:
-            logger.info(f"  Batch {batch_idx + 1}/{num_batches} - Loss: {batch_loss:.6f}")
+        # Track step-level loss
+        current_step = global_step + batch_idx + 1
+        step_losses.append({
+            "fold": fold,
+            "epoch": epoch + 1,
+            "step": current_step,
+            "batch": batch_idx + 1,
+            "loss": batch_loss
+        })
+
+        # Print loss every 10 steps
+        if (batch_idx + 1) % 10 == 0:
+            print(f"Fold {fold + 1}, Epoch {epoch + 1}, Step {current_step}: Loss = {batch_loss:.6f}")
 
         loss.backward()
         optimizer.step()
@@ -108,9 +102,26 @@ def train_model(model, train_loader, optimizer, scheduler=None):
             scheduler.step()
         optimizer.zero_grad()
 
-    avg_loss = total_loss / num_batches
-    logger.info(f"Average training loss: {avg_loss:.6f}")
-    return avg_loss
+    # Save step losses to file
+    step_loss_file = f"fold_{fold + 1}_epoch_{epoch + 1}_step_losses.json"
+    with open(step_loss_file, "w") as f:
+        json.dump(step_losses, f, indent=2)
+
+    print(f"Saved step losses to {step_loss_file}")
+
+    # Create step loss plot
+    plt.figure(figsize=(10, 6))
+    steps = [s["step"] for s in step_losses]
+    losses = [s["loss"] for s in step_losses]
+    plt.plot(steps, losses)
+    plt.title(f"Fold {fold + 1}, Epoch {epoch + 1} - Loss by Step")
+    plt.xlabel("Step")
+    plt.ylabel("Loss")
+    plt.grid(True, linestyle='--', alpha=0.7)
+    plt.savefig(f"fold_{fold + 1}_epoch_{epoch + 1}_step_loss.png")
+    plt.close()
+
+    return total_loss / num_batches, step_losses  # Return average loss and step losses
 
 
 # Evaluation function
@@ -126,14 +137,10 @@ def evaluate_model(model, val_loader):
             outputs = model(**batch)
             logits = outputs.logits
             loss = outputs.loss
-            batch_loss = loss.item()
-            total_loss += batch_loss
+            total_loss += loss.item()
 
             preds += torch.argmax(logits, dim=1).cpu().tolist()
             labels += batch["labels"].cpu().tolist()
-
-    avg_loss = total_loss / num_batches
-    logger.info(f"Average validation loss: {avg_loss:.6f}")
 
     acc = accuracy_score(labels, preds)
     precision, recall, f1, _ = precision_recall_fscore_support(labels, preds, average="weighted")
@@ -143,7 +150,7 @@ def evaluate_model(model, val_loader):
     fp = cm.sum(axis=0) - np.diag(cm)  # false positives per class
     total_fp = fp.sum()  # total false positives
 
-    return acc, precision, recall, f1, total_fp, preds, avg_loss
+    return acc, precision, recall, f1, total_fp, preds, total_loss / num_batches
 
 
 # Save model function
@@ -169,7 +176,7 @@ def save_model(model, tokenizer, fold, metrics, output_dir="saved_models"):
     with open(os.path.join(fold_dir, "metrics.json"), "w") as f:
         json.dump(metrics, f)
 
-    logger.info(f"Model and metrics saved to {fold_dir}")
+    print(f"Model and metrics saved to {fold_dir}")
 
 
 # K-Fold Cross Validation with time tracking and learning rate scheduler
@@ -181,11 +188,12 @@ def cross_validate(texts, labels, k=5, epochs=20, batch_size=8, learning_rate=5e
 
     # For storing detailed training metrics
     training_history = {}
+    all_step_losses = []  # Store all step losses across folds
 
     for fold, (train_idx, val_idx) in enumerate(kfold.split(texts)):
-        logger.info(f"\n{'=' * 50}")
-        logger.info(f"Fold {fold + 1}/{k}")
-        logger.info(f"{'=' * 50}")
+        print(f"\n{'=' * 50}")
+        print(f"Fold {fold + 1}/{k}")
+        print(f"{'=' * 50}")
 
         fold_start_time = time.time()
 
@@ -194,10 +202,10 @@ def cross_validate(texts, labels, k=5, epochs=20, batch_size=8, learning_rate=5e
         val_texts = [texts[i] for i in val_idx]
         val_labels = [labels[i] for i in val_idx]
 
-        logger.info(f"Training set size: {len(train_texts)}")
-        logger.info(f"Validation set size: {len(val_texts)}")
-        logger.info(f"Train labels distribution: {np.bincount(train_labels)}")
-        logger.info(f"Validation labels distribution: {np.bincount(val_labels)}")
+        print(f"Training set size: {len(train_texts)}")
+        print(f"Validation set size: {len(val_texts)}")
+        print("Train labels distribution:", np.bincount(train_labels))
+        print("Validation labels distribution:", np.bincount(val_labels))
 
         train_dataset = TextDataset(train_texts, train_labels)
         val_dataset = TextDataset(val_texts, val_labels)
@@ -206,7 +214,6 @@ def cross_validate(texts, labels, k=5, epochs=20, batch_size=8, learning_rate=5e
         val_loader = DataLoader(val_dataset, batch_size=batch_size)
 
         # Model initialization - using RoBERTa base
-        logger.info("Initializing RoBERTa base model...")
         base_model = RobertaModel.from_pretrained("roberta-base")
         model = CustomRobertaClassifier(base_model, hidden_size=768, num_labels=max(labels) + 1)
         model.to(device)
@@ -226,19 +233,33 @@ def cross_validate(texts, labels, k=5, epochs=20, batch_size=8, learning_rate=5e
             "precision": [],
             "recall": [],
             "f1": [],
-            "epoch_times": []
+            "epoch_times": [],
+            "step_losses": []  # New tracking for step losses
         }
 
         # Training loop
         best_val_f1 = 0
         best_model_state = None
 
+        # Create fold loss directory
+        fold_loss_dir = f"fold_{fold + 1}_losses"
+        if not os.path.exists(fold_loss_dir):
+            os.makedirs(fold_loss_dir)
+
         for epoch in range(epochs):
             epoch_start = time.time()
-            logger.info(f"\nEpoch {epoch + 1}/{epochs}")
+            print(f"\nEpoch {epoch + 1}/{epochs}")
 
-            # Train
-            train_loss = train_model(model, train_loader, optimizer, scheduler)
+            # Train with detailed loss tracking
+            train_loss, epoch_step_losses = train_model(model, train_loader, optimizer, scheduler, fold, epoch)
+
+            # Track all step losses
+            all_step_losses.extend(epoch_step_losses)
+            fold_history["step_losses"].extend(epoch_step_losses)
+
+            # Save all step losses for this epoch
+            with open(f"{fold_loss_dir}/epoch_{epoch + 1}_losses.json", "w") as f:
+                json.dump(epoch_step_losses, f, indent=2)
 
             # Evaluate
             acc, precision, recall, f1, total_fp, preds, val_loss = evaluate_model(model, val_loader)
@@ -267,24 +288,25 @@ def cross_validate(texts, labels, k=5, epochs=20, batch_size=8, learning_rate=5e
                         "f1": f1
                     }
                 }
-                logger.info(f"New best model found! F1: {f1:.4f}")
 
             # Print epoch results with time
-            logger.info(f"Epoch completed in {timedelta(seconds=epoch_time)}")
-            logger.info(f"Train Loss: {train_loss:.6f}, Val Loss: {val_loss:.6f}")
-            logger.info(f"Accuracy: {acc:.4f}, Precision: {precision:.4f}, Recall: {recall:.4f}, F1: {f1:.4f}")
+            print(f"Epoch completed in {timedelta(seconds=epoch_time)}")
+            print(f"Train Loss: {train_loss:.4f}, Val Loss: {val_loss:.4f}")
+            print(f"Accuracy: {acc:.4f}, Precision: {precision:.4f}, Recall: {recall:.4f}, F1: {f1:.4f}")
+
+        # Save complete fold history with step losses
+        with open(f"{fold_loss_dir}/complete_fold_history.json", "w") as f:
+            json.dump(fold_history, f, indent=2)
 
         # Load the best model for final evaluation
         if best_model_state:
             model.load_state_dict(best_model_state["model_state_dict"])
-            logger.info(f"\nLoaded best model from epoch {best_model_state['epoch'] + 1}")
+            print(f"\nLoaded best model from epoch {best_model_state['epoch'] + 1}")
 
         # Final evaluation
-        logger.info("\nPerforming final evaluation...")
         acc, precision, recall, f1, total_fp, preds, val_loss = evaluate_model(model, val_loader)
-        logger.info(f"\n✅ Final Evaluation:")
-        logger.info(
-            f"Accuracy: {acc:.4f}, Precision: {precision:.4f}, Recall: {recall:.4f}, F1: {f1:.4f}, FP: {total_fp}")
+        print(f"\n✅ Final Evaluation:")
+        print(f"Accuracy: {acc:.4f}, Precision: {precision:.4f}, Recall: {recall:.4f}, F1: {f1:.4f}, FP: {total_fp}")
 
         # Save best model checkpoint
         save_model(model, tokenizer, fold, best_model_state["metrics"])
@@ -292,7 +314,7 @@ def cross_validate(texts, labels, k=5, epochs=20, batch_size=8, learning_rate=5e
         # Calculate fold time
         fold_time = time.time() - fold_start_time
         fold_times.append(fold_time)
-        logger.info(f"Fold completed in {timedelta(seconds=fold_time)}")
+        print(f"Fold completed in {timedelta(seconds=fold_time)}")
 
         # Store fold results
         fold_results.append((acc, precision, recall, f1, total_fp))
@@ -300,7 +322,6 @@ def cross_validate(texts, labels, k=5, epochs=20, batch_size=8, learning_rate=5e
         training_history[f"fold_{fold + 1}"] = fold_history
 
         # Plot training curves for this fold
-        logger.info(f"Generating training curves for fold {fold + 1}...")
         plt.figure(figsize=(12, 10))
 
         # Loss curves
@@ -340,7 +361,6 @@ def cross_validate(texts, labels, k=5, epochs=20, batch_size=8, learning_rate=5e
         plt.close()
 
         # Generate and save confusion matrix
-        logger.info(f"Generating confusion matrix for fold {fold + 1}...")
         cm = confusion_matrix(val_labels, preds)
         plt.figure(figsize=(10, 8))
         sns.heatmap(cm, annot=True, fmt='d', cmap='Blues')
@@ -353,180 +373,180 @@ def cross_validate(texts, labels, k=5, epochs=20, batch_size=8, learning_rate=5e
     # Save overall training history
     with open("training_history.json", "w") as f:
         json.dump(training_history, f)
-    logger.info("Training history saved to training_history.json")
+
+    # Save all step losses across all folds
+    with open("all_step_losses.json", "w") as f:
+        json.dump(all_step_losses, f, indent=2)
+
+    # Create global step loss visualization
+    plt.figure(figsize=(15, 8))
+
+    # Group by fold
+    for fold in range(k):
+        fold_steps = [s for s in all_step_losses if s["fold"] == fold]
+        if fold_steps:
+            steps = [s["step"] for s in fold_steps]
+            losses = [s["loss"] for s in fold_steps]
+            plt.plot(steps, losses, label=f"Fold {fold + 1}")
+
+    plt.title("Training Loss by Step Across All Folds")
+    plt.xlabel("Global Step")
+    plt.ylabel("Loss")
+    plt.legend()
+    plt.grid(True, linestyle='--', alpha=0.6)
+    plt.savefig("global_step_loss.png")
+    plt.close()
 
     # Return complete results
-    return fold_results, fold_times, fold_metrics, training_history
+    return fold_results, fold_times, fold_metrics, training_history, all_step_losses
 
 
 # Main execution
 if __name__ == "__main__":
-    logger.info("=" * 80)
-    logger.info("STARTING ROBERTA-BASE TRAINING PROCESS")
-    logger.info("=" * 80)
-    logger.info(f"Start time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-    logger.info(f"Log file: {log_filename}")
+    print("Loading data...")
 
-    logger.info("Loading data...")
+    # Load label dictionary
+    with open('../label_dict.pkl', 'rb') as file:
+        labels_dic = pickle.load(file)
 
-    try:
-        # Load label dictionary
-        with open('../label_dict.pkl', 'rb') as file:
-            labels_dic = pickle.load(file)
-        logger.info("Label dictionary loaded successfully")
+    # Load datasets
+    df_train = pd.DataFrame(pd.read_csv('../unique_train_df.csv'))
+    df_test = pd.DataFrame(pd.read_csv('../unique_train_df.csv'))
+    df_train["cats"] = df_train["cats"].apply(ast.literal_eval)
+    df_test["cats"] = df_test["cats"].apply(ast.literal_eval)
+    df_train["text"] = df_train["text"].apply(
+        lambda x: ' '.join(map(str, x.tolist())) if isinstance(x, pd.Series) else str(x))
+    df_test["text"] = df_test["text"].apply(
+        lambda x: ' '.join(map(str, x.tolist())) if isinstance(x, pd.Series) else str(x))
 
-        # Load datasets
-        df_train = pd.DataFrame(pd.read_csv('../unique_train_df.csv'))
-        df_test = pd.DataFrame(pd.read_csv('../unique_train_df.csv'))
-        logger.info("CSV data loaded successfully")
+    # Prepare data
+    sentences = df_train["text"].tolist() + df_test["text"].tolist()
+    labels = []
+    for _, va in df_train["cats"].items():
+        for k, v in va.items():
+            if v == 1.0:
+                labels.append(k)
+    for _, va in df_test["cats"].items():
+        for k, v in va.items():
+            if v == 1.0:
+                labels.append(k)
 
-        df_train["cats"] = df_train["cats"].apply(ast.literal_eval)
-        df_test["cats"] = df_test["cats"].apply(ast.literal_eval)
-        df_train["text"] = df_train["text"].apply(
-            lambda x: ' '.join(map(str, x.tolist())) if isinstance(x, pd.Series) else str(x))
-        df_test["text"] = df_test["text"].apply(
-            lambda x: ' '.join(map(str, x.tolist())) if isinstance(x, pd.Series) else str(x))
-        logger.info("Data preprocessing completed")
+    # Convert labels to IDs
+    labels_id = []
+    for lb in labels:
+        labels_id.append(labels_dic[lb])
 
-        # Prepare data
-        sentences = df_train["text"].tolist() + df_test["text"].tolist()
-        labels = []
-        for _, va in df_train["cats"].items():
-            for k, v in va.items():
-                if v == 1.0:
-                    labels.append(k)
-        for _, va in df_test["cats"].items():
-            for k, v in va.items():
-                if v == 1.0:
-                    labels.append(k)
+    # Print dataset statistics
+    print(f"Total samples: {len(sentences)}")
+    print(f"Number of unique classes: {len(set(labels_id))}")
+    print(f"Class distribution: {np.bincount(labels_id)}")
 
-        # Convert labels to IDs
-        labels_id = []
-        for lb in labels:
-            labels_id.append(labels_dic[lb])
+    # Set training parameters
+    params = {
+        "k": 5,  # Number of folds
+        "epochs": 20,  # Number of training epochs
+        "batch_size": 8,  # Batch size
+        "learning_rate": 2e-5  # Learning rate (slightly reduced for RoBERTa base)
+    }
 
-        # Print dataset statistics
-        logger.info(f"Total samples: {len(sentences)}")
-        logger.info(f"Number of unique classes: {len(set(labels_id))}")
-        logger.info(f"Class distribution: {np.bincount(labels_id)}")
+    # Start time measurement for the entire process
+    total_start_time = time.time()
 
-        # Set training parameters
-        params = {
-            "k": 5,  # Number of folds
-            "epochs": 20,  # Number of training epochs
-            "batch_size": 8,  # Batch size
-            "learning_rate": 2e-5  # Learning rate (slightly reduced for RoBERTa base)
-        }
-        logger.info(f"Training parameters: {params}")
+    # Run cross-validation
+    print(f"\nStarting {params['k']}-fold cross-validation with {params['epochs']} epochs using RoBERTa-base...")
+    results, fold_times, fold_metrics, training_history, all_step_losses = cross_validate(
+        sentences,
+        labels_id,
+        k=params["k"],
+        epochs=params["epochs"],
+        batch_size=params["batch_size"],
+        learning_rate=params["learning_rate"]
+    )
 
-        # Start time measurement for the entire process
-        total_start_time = time.time()
+    # Calculate total time
+    total_time = time.time() - total_start_time
 
-        # Run cross-validation
-        logger.info(
-            f"\nStarting {params['k']}-fold cross-validation with {params['epochs']} epochs using RoBERTa-base...")
-        results, fold_times, fold_metrics, training_history = cross_validate(
-            sentences,
-            labels_id,
-            k=params["k"],
-            epochs=params["epochs"],
-            batch_size=params["batch_size"],
-            learning_rate=params["learning_rate"]
-        )
+    # Calculate average metrics
+    results_array = np.array(results)
+    avg_metrics = results_array.mean(axis=0)
+    std_metrics = results_array.std(axis=0)
 
-        # Calculate total time
-        total_time = time.time() - total_start_time
+    # Print overall results
+    print("\n" + "=" * 50)
+    print("🔍 CROSS-VALIDATION RESULTS (RoBERTa-base)")
+    print("=" * 50)
+    print(f"Total training time: {timedelta(seconds=total_time)}")
+    print(f"Average fold time: {timedelta(seconds=np.mean(fold_times))}")
 
-        # Calculate average metrics
-        results_array = np.array(results)
-        avg_metrics = results_array.mean(axis=0)
-        std_metrics = results_array.std(axis=0)
+    print("\n📊 PER-FOLD METRICS:")
+    for i, ((acc, prec, rec, f1, fp), time_taken) in enumerate(zip(results, fold_times)):
+        print(
+            f"Fold {i + 1}: Acc={acc:.4f}, Prec={prec:.4f}, Rec={rec:.4f}, F1={f1:.4f}, Time={timedelta(seconds=time_taken)}")
 
-        # Print overall results
-        logger.info("\n" + "=" * 50)
-        logger.info("🔍 CROSS-VALIDATION RESULTS (RoBERTa-base)")
-        logger.info("=" * 50)
-        logger.info(f"Total training time: {timedelta(seconds=total_time)}")
-        logger.info(f"Average fold time: {timedelta(seconds=np.mean(fold_times))}")
+    print("\n📈 AVERAGE RESULTS:")
+    print(f"Accuracy: {avg_metrics[0]:.4f} ± {std_metrics[0]:.4f}")
+    print(f"Precision: {avg_metrics[1]:.4f} ± {std_metrics[1]:.4f}")
+    print(f"Recall: {avg_metrics[2]:.4f} ± {std_metrics[2]:.4f}")
+    print(f"F1 Score: {avg_metrics[3]:.4f} ± {std_metrics[3]:.4f}")
+    print(f"False Positives: {avg_metrics[4]:.1f} ± {std_metrics[4]:.1f}")
 
-        logger.info("\n📊 PER-FOLD METRICS:")
-        for i, ((acc, prec, rec, f1, fp), time_taken) in enumerate(zip(results, fold_times)):
-            logger.info(
-                f"Fold {i + 1}: Acc={acc:.4f}, Prec={prec:.4f}, Rec={rec:.4f}, F1={f1:.4f}, Time={timedelta(seconds=time_taken)}")
+    # Plot overall metrics across folds
+    plt.figure(figsize=(12, 8))
+    metrics = ["Accuracy", "Precision", "Recall", "F1"]
 
-        logger.info("\n📈 AVERAGE RESULTS:")
-        logger.info(f"Accuracy: {avg_metrics[0]:.4f} ± {std_metrics[0]:.4f}")
-        logger.info(f"Precision: {avg_metrics[1]:.4f} ± {std_metrics[1]:.4f}")
-        logger.info(f"Recall: {avg_metrics[2]:.4f} ± {std_metrics[2]:.4f}")
-        logger.info(f"F1 Score: {avg_metrics[3]:.4f} ± {std_metrics[3]:.4f}")
-        logger.info(f"False Positives: {avg_metrics[4]:.1f} ± {std_metrics[4]:.1f}")
+    for i, metric_name in enumerate(metrics):
+        plt.subplot(2, 2, i + 1)
+        values = [result[i] for result in results]
+        plt.bar(range(1, len(values) + 1), values)
+        plt.axhline(y=np.mean(values), color='r', linestyle='-', label=f'Mean: {np.mean(values):.4f}')
+        plt.title(f"{metric_name} across folds")
+        plt.xlabel("Fold")
+        plt.ylabel(metric_name)
+        plt.ylim(0, 1)
+        plt.legend()
 
-        # Plot overall metrics across folds
-        logger.info("Generating final cross-validation metrics visualization...")
-        plt.figure(figsize=(12, 8))
-        metrics = ["Accuracy", "Precision", "Recall", "F1"]
+    plt.tight_layout()
+    plt.savefig("roberta_base_cross_validation_metrics.png")
 
-        for i, metric_name in enumerate(metrics):
-            plt.subplot(2, 2, i + 1)
-            values = [result[i] for result in results]
-            plt.bar(range(1, len(values) + 1), values)
-            plt.axhline(y=np.mean(values), color='r', linestyle='-', label=f'Mean: {np.mean(values):.4f}')
-            plt.title(f"{metric_name} across folds")
-            plt.xlabel("Fold")
-            plt.ylabel(metric_name)
-            plt.ylim(0, 1)
-            plt.legend()
+    # Save final results to JSON
+    final_results = {
+        "model": "roberta-base",
+        "params": params,
+        "avg_metrics": {
+            "accuracy": float(avg_metrics[0]),
+            "precision": float(avg_metrics[1]),
+            "recall": float(avg_metrics[2]),
+            "f1": float(avg_metrics[3]),
+            "false_positives": float(avg_metrics[4])
+        },
+        "std_metrics": {
+            "accuracy": float(std_metrics[0]),
+            "precision": float(std_metrics[1]),
+            "recall": float(std_metrics[2]),
+            "f1": float(std_metrics[3]),
+            "false_positives": float(std_metrics[4])
+        },
+        "fold_results": [
+            {
+                "fold": i + 1,
+                "metrics": {
+                    "accuracy": float(results[i][0]),
+                    "precision": float(results[i][1]),
+                    "recall": float(results[i][2]),
+                    "f1": float(results[i][3]),
+                    "false_positives": int(results[i][4])
+                },
+                "time_seconds": float(fold_times[i])
+            }
+            for i in range(len(results))
+        ],
+        "total_time_seconds": float(total_time),
+        "average_fold_time_seconds": float(np.mean(fold_times))
+    }
 
-        plt.tight_layout()
-        plt.savefig("roberta_base_cross_validation_metrics.png")
+    with open("roberta_base_results.json", "w") as f:
+        json.dump(final_results, f, indent=2)
 
-        # Save final results to JSON
-        logger.info("Saving final results...")
-        final_results = {
-            "model": "roberta-base",
-            "params": params,
-            "avg_metrics": {
-                "accuracy": float(avg_metrics[0]),
-                "precision": float(avg_metrics[1]),
-                "recall": float(avg_metrics[2]),
-                "f1": float(avg_metrics[3]),
-                "false_positives": float(avg_metrics[4])
-            },
-            "std_metrics": {
-                "accuracy": float(std_metrics[0]),
-                "precision": float(std_metrics[1]),
-                "recall": float(std_metrics[2]),
-                "f1": float(std_metrics[3]),
-                "false_positives": float(std_metrics[4])
-            },
-            "fold_results": [
-                {
-                    "fold": i + 1,
-                    "metrics": {
-                        "accuracy": float(results[i][0]),
-                        "precision": float(results[i][1]),
-                        "recall": float(results[i][2]),
-                        "f1": float(results[i][3]),
-                        "false_positives": int(results[i][4])
-                    },
-                    "time_seconds": float(fold_times[i])
-                }
-                for i in range(len(results))
-            ],
-            "total_time_seconds": float(total_time),
-            "average_fold_time_seconds": float(np.mean(fold_times))
-        }
-
-        with open("roberta_base_results.json", "w") as f:
-            json.dump(final_results, f, indent=2)
-
-        logger.info("\n✅ Results saved to roberta_base_results.json")
-        logger.info("\n🎉 Training and evaluation completed!")
-
-    except Exception as e:
-        logger.exception(f"An error occurred during training: {str(e)}")
-        raise
-
-    finally:
-        logger.info(f"End time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-        logger.info("=" * 80)
+    print("\n✅ Results saved to roberta_base_results.json")
+    print("✅ Step-level losses saved to all_step_losses.json")
+    print("\n🎉 Training and evaluation completed!")
