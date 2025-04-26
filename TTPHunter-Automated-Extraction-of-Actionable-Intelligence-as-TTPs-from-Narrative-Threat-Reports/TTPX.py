@@ -19,6 +19,11 @@ import time
 from datetime import timedelta
 from transformers.modeling_outputs import SequenceClassifierOutput
 from transformers import get_cosine_schedule_with_warmup
+import torch.backends.cudnn as cudnn
+
+cudnn.benchmark = False
+cudnn.deterministic = True
+torch.cuda.empty_cache()
 
 os.environ["CUDA_LAUNCH_BLOCKING"] = "1"
 
