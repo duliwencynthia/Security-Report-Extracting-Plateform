@@ -34,23 +34,38 @@ class CustomRobertaClassifier(nn.Module):
         super().__init__()
         self.roberta = base_model
         self.dropout = nn.Dropout(0.1)
+        # Store num_labels for easy access
+        self.num_labels = num_labels
         self.classifier = nn.Linear(hidden_size, num_labels)
 
-    def forward(self, input_ids=None, attention_mask=None, labels=None):
-        outputs = self.roberta(input_ids=input_ids, attention_mask=attention_mask)
-        pooled_output = outputs.pooler_output
-        pooled_output = self.dropout(pooled_output)
-        logits = self.classifier(pooled_output)
+        # Add class_weights parameter with default None
+        def forward(self, input_ids=None, attention_mask=None, labels=None, class_weights=None):
+            outputs = self.roberta(input_ids=input_ids, attention_mask=attention_mask)
+            # Use last_hidden_state and pool manually if pooler_output is unreliable
+            # For sequence classification, often the [CLS] token embedding is used
+            # last_hidden_state = outputs.last_hidden_state
+            # pooled_output = last_hidden_state[:, 0] # Get embedding of [CLS] token
 
-        loss = None
-        if labels is not None:
-            loss_fn = nn.CrossEntropyLoss()
-            loss = loss_fn(logits, labels)
+            # Using the default pooler output (trained during pre-training, might work)
+            pooled_output = outputs.pooler_output
 
-        return SequenceClassifierOutput(
-            loss=loss,
-            logits=logits,
-        )
+            pooled_output = self.dropout(pooled_output)
+            logits = self.classifier(pooled_output)
+
+            loss = None
+            if labels is not None:
+                # Use the provided class_weights tensor in the loss function
+                loss_fn = nn.CrossEntropyLoss(weight=class_weights)  # Pass weights here!
+                # Ensure logits and labels have the correct shape for CrossEntropyLoss
+                # Logits: (batch_size, num_classes), Labels: (batch_size)
+                loss = loss_fn(logits.view(-1, self.num_labels), labels.view(-1))
+
+            return SequenceClassifierOutput(
+                loss=loss,
+                logits=logits,
+                # hidden_states=outputs.hidden_states, # Optional
+                # attentions=outputs.attentions, # Optional
+            )
 
 
 class TextDataset(Dataset):
@@ -68,7 +83,7 @@ class TextDataset(Dataset):
 
 
 # Training function with detailed loss tracking
-def train_model(model, train_loader, optimizer, scheduler=None, fold=0, epoch=0):
+def train_model(model, train_loader, optimizer, scheduler=None, fold=0, epoch=0, class_weights=None):
     model.train()
     total_loss = 0
     num_batches = len(train_loader)
@@ -77,7 +92,15 @@ def train_model(model, train_loader, optimizer, scheduler=None, fold=0, epoch=0)
 
     for batch_idx, batch in enumerate(tqdm(train_loader, desc="Training")):
         batch = {k: v.to(device) for k, v in batch.items()}
-        outputs = model(**batch)
+        # Move data to device BEFORE passing to model
+        batch_labels = batch["labels"].to(device)
+        batch_input_ids = batch["input_ids"].to(device)
+        batch_attention_mask = batch["attention_mask"].to(device)
+        #outputs = model(**batch)
+        outputs = model(input_ids=batch_input_ids,
+                        attention_mask=batch_attention_mask,
+                        labels=batch_labels,
+                        class_weights=class_weights)  # <-- Pass weights here
         loss = outputs.loss
         batch_loss = loss.item()
         total_loss += batch_loss
@@ -180,7 +203,7 @@ def save_model(model, tokenizer, fold, metrics, output_dir="saved_models"):
 
 
 # K-Fold Cross Validation with time tracking and learning rate scheduler
-def cross_validate(texts, labels, k=5, epochs=20, batch_size=8, learning_rate=5e-5):
+def cross_validate(texts, labels, k=5, epochs=10, batch_size=16, learning_rate=5e-5):
     kfold = KFold(n_splits=k, shuffle=True, random_state=42)
     fold_results = []
     fold_times = []
@@ -207,6 +230,31 @@ def cross_validate(texts, labels, k=5, epochs=20, batch_size=8, learning_rate=5e
         print("Train labels distribution:", np.bincount(train_labels))
         print("Validation labels distribution:", np.bincount(val_labels))
 
+        print("Calculating class weights for weighted loss...")
+        num_labels = max(labels) + 1  # Or determine dynamically: len(np.unique(labels_id))
+        class_counts = np.bincount(train_labels, minlength=num_labels)
+
+        # Handle potential zero counts if a class is missing in a fold's train set (rare with shuffle/stratify)
+        if np.any(class_counts == 0):
+            print(
+                f"Warning: Class counts for fold {fold + 1}: {class_counts}. Some classes might be missing in the training split.")
+            # Assign a very high weight or use a floor? Using inverse frequency might be unstable.
+            # A simple approach is to use 1 / (count + epsilon)
+            epsilon = 1e-6  # Small value to prevent division by zero
+            weights = 1.0 / (class_counts + epsilon)
+            # Normalize weights (optional, but can help)
+            weights = weights / np.sum(weights) * num_labels
+
+        else:
+            # Standard inverse frequency weighting
+            # Formula: weight = total_samples / (num_classes * count_per_class)
+            total_samples = len(train_labels)
+            weights = total_samples / (num_labels * class_counts)
+
+        print(f"Calculated weights: {weights}")
+        # Convert weights to a tensor and move to the device
+        class_weights_tensor = torch.tensor(weights, dtype=torch.float).to(device)
+
         train_dataset = TextDataset(train_texts, train_labels)
         val_dataset = TextDataset(val_texts, val_labels)
 
@@ -214,7 +262,7 @@ def cross_validate(texts, labels, k=5, epochs=20, batch_size=8, learning_rate=5e
         val_loader = DataLoader(val_dataset, batch_size=batch_size)
 
         # Model initialization - using RoBERTa base
-        base_model = RobertaModel.from_pretrained("roberta-base")
+        base_model = RobertaModel.from_pretrained("nanda-rani/TTPXHunter")
         model = CustomRobertaClassifier(base_model, hidden_size=768, num_labels=max(labels) + 1)
         model.to(device)
 
@@ -251,7 +299,16 @@ def cross_validate(texts, labels, k=5, epochs=20, batch_size=8, learning_rate=5e
             print(f"\nEpoch {epoch + 1}/{epochs}")
 
             # Train with detailed loss tracking
-            train_loss, epoch_step_losses = train_model(model, train_loader, optimizer, scheduler, fold, epoch)
+            # train_loss, epoch_step_losses = train_model(model, train_loader, optimizer, scheduler, fold, epoch)
+            train_loss, epoch_step_losses = train_model(
+                model,
+                train_loader,
+                optimizer,
+                scheduler,
+                fold,
+                epoch,
+                class_weights=class_weights_tensor  # <-- Pass the tensor here
+            )
 
             # Track all step losses
             all_step_losses.extend(epoch_step_losses)
@@ -420,16 +477,17 @@ if __name__ == "__main__":
         lambda x: ' '.join(map(str, x.tolist())) if isinstance(x, pd.Series) else str(x))
 
     # Prepare data
-    sentences = df_train["text"].tolist() + df_test["text"].tolist()
+    #sentences = df_train["text"].tolist() + df_test["text"].tolist()
+    sentences = df_train["text"].tolist()
     labels = []
     for _, va in df_train["cats"].items():
         for k, v in va.items():
             if v == 1.0:
                 labels.append(k)
-    for _, va in df_test["cats"].items():
-        for k, v in va.items():
-            if v == 1.0:
-                labels.append(k)
+    # for _, va in df_test["cats"].items():
+    #     for k, v in va.items():
+    #         if v == 1.0:
+    #             labels.append(k)
 
     # Convert labels to IDs
     labels_id = []
@@ -444,8 +502,8 @@ if __name__ == "__main__":
     # Set training parameters
     params = {
         "k": 5,  # Number of folds
-        "epochs": 20,  # Number of training epochs
-        "batch_size": 8,  # Batch size
+        "epochs": 10,  # Number of training epochs
+        "batch_size": 16,  # Batch size
         "learning_rate": 2e-5  # Learning rate (slightly reduced for RoBERTa base)
     }
 
