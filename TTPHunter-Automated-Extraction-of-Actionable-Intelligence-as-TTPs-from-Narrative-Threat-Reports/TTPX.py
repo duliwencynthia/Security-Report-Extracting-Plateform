@@ -205,7 +205,7 @@ def save_model(model, tokenizer, fold, metrics, output_dir="saved_models"):
 
 
 # K-Fold Cross Validation with time tracking and learning rate scheduler
-def cross_validate(texts, labels, k=5, epochs=10, batch_size=32, learning_rate=5e-6):
+def cross_validate(texts, labels, k=5, epochs=10, batch_size=16, learning_rate=5e-6):
     kfold = KFold(n_splits=k, shuffle=True, random_state=42)
     fold_results = []
     fold_times = []
@@ -514,7 +514,7 @@ if __name__ == "__main__":
     params = {
         "k": 5,  # Number of folds
         "epochs": 10,  # Number of training epochs
-        "batch_size": 32,  # Batch size
+        "batch_size": 16,  # Batch size
         "learning_rate": 5e-6  # Learning rate (slightly reduced for RoBERTa base)
     }
 
