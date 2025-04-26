@@ -531,7 +531,7 @@ if __name__ == "__main__":
 
     # Print overall results
     print("\n" + "=" * 50)
-    print("🔍 CROSS-VALIDATION RESULTS (RoBERTa-base)")
+    print("🔍 CROSS-VALIDATION RESULTS (RoBERTa)")
     print("=" * 50)
     print(f"Total training time: {timedelta(seconds=total_time)}")
     print(f"Average fold time: {timedelta(seconds=np.mean(fold_times))}")
@@ -568,7 +568,7 @@ if __name__ == "__main__":
 
     # Save final results to JSON
     final_results = {
-        "model": "roberta-base",
+        "model": "roberta",
         "params": params,
         "avg_metrics": {
             "accuracy": float(avg_metrics[0]),
@@ -603,7 +603,7 @@ if __name__ == "__main__":
     }
 
     with open("roberta_base_results.json", "w") as f:
-        json.dump(final_results, f, indent=2)ls
+        json.dump(final_results, f, indent=2)
 
     print("\n✅ Results saved to roberta_base_results.json")
     print("✅ Step-level losses saved to all_step_losses.json")

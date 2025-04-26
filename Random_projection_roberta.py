@@ -125,7 +125,7 @@ def find_optimal_projection_dim(texts, labels, projection_dims=[64, 128, 256, 38
     log_message("Extracting features from RoBERTa model")
 
     # Extract features from RoBERTa
-    base_model = RobertaModel.from_pretrained("roberta-base")
+    base_model = RobertaModel.from_pretrained("nanda-rani/TTPXHunter")
     base_model.to(device)
     base_model.eval()
 
@@ -229,7 +229,7 @@ def extract_and_project_features(texts, labels, projection_dim):
     loader = DataLoader(text_dataset, batch_size=8, shuffle=False)
 
     # Extract features from RoBERTa
-    base_model = RobertaModel.from_pretrained("roberta-base")
+    base_model = RobertaModel.from_pretrained("nanda-rani/TTPXHunter")
     base_model.to(device)
     base_model.eval()
 
@@ -603,7 +603,7 @@ if __name__ == "__main__":
 
     # Save results to JSON file
     results_dict = {
-        "model": "roberta-base with random projection preprocessing",
+        "model": "roberta with random projection preprocessing",
         "datetime": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         "device": str(device),
         "projection_dimension": int(optimal_dim),
