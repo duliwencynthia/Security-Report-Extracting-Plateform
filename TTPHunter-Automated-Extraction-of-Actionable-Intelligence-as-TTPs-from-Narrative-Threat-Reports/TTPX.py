@@ -18,6 +18,7 @@ import ast
 import time
 from datetime import timedelta
 from transformers.modeling_outputs import SequenceClassifierOutput
+from transformers import get_cosine_schedule_with_warmup
 
 os.environ["CUDA_LAUNCH_BLOCKING"] = "1"
 
@@ -120,6 +121,7 @@ def train_model(model, train_loader, optimizer, scheduler=None, fold=0, epoch=0,
             print(f"Fold {fold + 1}, Epoch {epoch + 1}, Step {current_step}: Loss = {batch_loss:.6f}")
 
         loss.backward()
+        torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0) #added
         optimizer.step()
         if scheduler:
             scheduler.step()
@@ -203,7 +205,7 @@ def save_model(model, tokenizer, fold, metrics, output_dir="saved_models"):
 
 
 # K-Fold Cross Validation with time tracking and learning rate scheduler
-def cross_validate(texts, labels, k=5, epochs=10, batch_size=16, learning_rate=5e-4):
+def cross_validate(texts, labels, k=5, epochs=10, batch_size=32, learning_rate=5e-6):
     kfold = KFold(n_splits=k, shuffle=True, random_state=42)
     fold_results = []
     fold_times = []
@@ -271,7 +273,16 @@ def cross_validate(texts, labels, k=5, epochs=10, batch_size=16, learning_rate=5
 
         # Learning rate scheduler
         total_steps = len(train_loader) * epochs
-        scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=total_steps)
+        #scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=total_steps)
+        # Learning rate scheduler with warmup
+        total_steps = len(train_loader) * epochs
+        warmup_steps = int(0.05 * total_steps)  # 5% warmup
+
+        scheduler = get_cosine_schedule_with_warmup(
+            optimizer,
+            num_warmup_steps=warmup_steps,
+            num_training_steps=total_steps
+        )
 
         # For tracking metrics
         fold_history = {
@@ -503,8 +514,8 @@ if __name__ == "__main__":
     params = {
         "k": 5,  # Number of folds
         "epochs": 10,  # Number of training epochs
-        "batch_size": 16,  # Batch size
-        "learning_rate": 5e-4  # Learning rate (slightly reduced for RoBERTa base)
+        "batch_size": 32,  # Batch size
+        "learning_rate": 5e-6  # Learning rate (slightly reduced for RoBERTa base)
     }
 
     # Start time measurement for the entire process
