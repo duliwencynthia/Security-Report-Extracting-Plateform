@@ -392,7 +392,7 @@ def cross_validate_with_projection_preprocessing(texts, labels, projection_dim=2
         model = ProjectedFeatureClassifier(projection_dim, num_labels)
         model.to(device)
 
-        optimizer = AdamW(model.parameters(), lr=5e-5)
+        optimizer = AdamW(model.parameters(), lr=5e-4)
 
         init_end = time.time()
         init_time = init_end - init_start
