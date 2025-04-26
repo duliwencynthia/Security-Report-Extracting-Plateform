@@ -26,7 +26,7 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(f"Using device: {device}")
 
 # Load RoBERTa base tokenizer instead of TTPXHunter
-tokenizer = RobertaTokenizer.from_pretrained("roberta-base")
+tokenizer = RobertaTokenizer.from_pretrained("nanda-rani/TTPXHunter")
 
 
 class CustomRobertaClassifier(nn.Module):
@@ -545,7 +545,7 @@ if __name__ == "__main__":
     }
 
     with open("roberta_base_results.json", "w") as f:
-        json.dump(final_results, f, indent=2)
+        json.dump(final_results, f, indent=2)ls
 
     print("\n✅ Results saved to roberta_base_results.json")
     print("✅ Step-level losses saved to all_step_losses.json")

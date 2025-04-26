@@ -40,8 +40,8 @@ def log_message(message):
 
 # Load tokenizer
 log_message(f"Using device: {device}")
-tokenizer = RobertaTokenizer.from_pretrained("roberta-base")
-log_message("Loaded RoBERTa tokenizer")
+tokenizer = RobertaTokenizer.from_pretrained("nanda-rani/TTPXHunter")
+log_message("Loaded TTPHunter tokenizer")
 
 
 class ProjectedFeatureDataset(Dataset):

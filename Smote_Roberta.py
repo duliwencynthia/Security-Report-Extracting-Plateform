@@ -14,12 +14,36 @@ from imblearn.over_sampling import SMOTE
 from collections import Counter
 import time
 import ast
+import logging
+import os
+from datetime import datetime
+
+# Configure logging
+log_dir = "logs"
+os.makedirs(log_dir, exist_ok=True)
+log_file = os.path.join(log_dir, f"roberta_training_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log")
+
+# Set up logger
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.FileHandler(log_file),
+        logging.StreamHandler()  # This will print to console as well
+    ]
+)
+logger = logging.getLogger(__name__)
+
+logger.info("Starting TTPhunter model training")
 
 # Set device
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+logger.info(f"Using device: {device}")
 
-# Load tokenizer
-tokenizer = RobertaTokenizer.from_pretrained("nanda-rani/TTPXHunter")
+# Load standard RoBERTa tokenizer and model instead of custom model
+model_name = "nanda-rani/TTPXHunter"
+logger.info(f"Loading {model_name} tokenizer and model")
+tokenizer = RobertaTokenizer.from_pretrained(model_name)
 
 
 class CustomRobertaClassifier(nn.Module):
@@ -79,7 +103,7 @@ def train_model_with_smote(model, train_texts, train_labels, batch_size, optimiz
     total_training_time = 0
 
     for epoch in range(epochs):
-        print(f"Epoch {epoch + 1}/{epochs}")
+        logger.info(f"Epoch {epoch + 1}/{epochs}")
 
         # Get embeddings for all training examples
         embeddings = []
@@ -104,20 +128,20 @@ def train_model_with_smote(model, train_texts, train_labels, batch_size, optimiz
         embedding_end = time.time()
         embedding_time = embedding_end - embedding_start
         total_embedding_time += embedding_time
-        print(f"Embedding extraction time: {embedding_time:.2f} seconds")
+        logger.info(f"Embedding extraction time: {embedding_time:.2f} seconds")
 
         # Apply SMOTE - measure time
         smote_start = time.time()
 
-        print("Class distribution before SMOTE:", Counter(y))
+        logger.info(f"Class distribution before SMOTE: {dict(Counter(y))}")
         smote = SMOTE(random_state=42)
         X_resampled, y_resampled = smote.fit_resample(X_embed, y)
-        print("Class distribution after SMOTE:", Counter(y_resampled))
+        logger.info(f"Class distribution after SMOTE: {dict(Counter(y_resampled))}")
 
         smote_end = time.time()
         smote_time = smote_end - smote_start
         total_smote_time += smote_time
-        print(f"SMOTE processing time: {smote_time:.2f} seconds")
+        logger.info(f"SMOTE processing time: {smote_time:.2f} seconds")
 
         # Create PyTorch tensors from resampled data
         X_tensor = torch.tensor(X_resampled, dtype=torch.float32).to(device)
@@ -157,14 +181,14 @@ def train_model_with_smote(model, train_texts, train_labels, batch_size, optimiz
         training_end = time.time()
         training_time = training_end - training_start
         total_training_time += training_time
-        print(f"Training time: {training_time:.2f} seconds")
+        logger.info(f"Training time: {training_time:.2f} seconds")
 
     # Report total times
-    print("\n===== TIMING SUMMARY (SMOTE) =====")
-    print(f"Total embedding extraction time: {total_embedding_time:.2f} seconds")
-    print(f"Total SMOTE processing time: {total_smote_time:.2f} seconds")
-    print(f"Total training time: {total_training_time:.2f} seconds")
-    print(f"Total time: {total_embedding_time + total_smote_time + total_training_time:.2f} seconds")
+    logger.info("\n===== TIMING SUMMARY (SMOTE) =====")
+    logger.info(f"Total embedding extraction time: {total_embedding_time:.2f} seconds")
+    logger.info(f"Total SMOTE processing time: {total_smote_time:.2f} seconds")
+    logger.info(f"Total training time: {total_training_time:.2f} seconds")
+    logger.info(f"Total time: {total_embedding_time + total_smote_time + total_training_time:.2f} seconds")
 
     return {
         "embedding_time": total_embedding_time,
@@ -191,7 +215,7 @@ def evaluate_model(model, val_loader):
 
     eval_end = time.time()
     eval_time = eval_end - eval_start
-    print(f"Evaluation time: {eval_time:.2f} seconds")
+    logger.info(f"Evaluation time: {eval_time:.2f} seconds")
 
     acc = accuracy_score(labels, preds)
     precision, recall, f1, _ = precision_recall_fscore_support(labels, preds, average="weighted")
@@ -211,7 +235,7 @@ def cross_validate_with_smote(texts, labels, k=5, epochs=50, batch_size=32):
     fold_times = []
 
     for fold, (train_idx, val_idx) in enumerate(kfold.split(texts)):
-        print(f"\n🧪 Fold {fold + 1}/{k}")
+        logger.info(f"\n🧪 Fold {fold + 1}/{k}")
         train_texts = [texts[i] for i in train_idx]
         train_labels = [labels[i] for i in train_idx]
         val_texts = [texts[i] for i in val_idx]
@@ -223,8 +247,8 @@ def cross_validate_with_smote(texts, labels, k=5, epochs=50, batch_size=32):
         # Time model initialization
         init_start = time.time()
 
-        # Initialize model
-        base_model = RobertaModel.from_pretrained("nanda-rani/TTPXHunter")
+        # Initialize model with standard RoBERTa
+        base_model = RobertaModel.from_pretrained(model_name)
         model = CustomRobertaClassifier(base_model, hidden_size=768, num_labels=max(labels) + 1)
         model.to(device)
 
@@ -232,14 +256,15 @@ def cross_validate_with_smote(texts, labels, k=5, epochs=50, batch_size=32):
 
         init_end = time.time()
         init_time = init_end - init_start
-        print(f"Model initialization time: {init_time:.2f} seconds")
+        logger.info(f"Model initialization time: {init_time:.2f} seconds")
 
         # Train with SMOTE and measure time
         training_times = train_model_with_smote(model, train_texts, train_labels, batch_size, optimizer, epochs)
 
         # Evaluate and measure time
         acc, precision, recall, f1, total_fp, preds, eval_time = evaluate_model(model, val_loader)
-        print(f"✅ Accuracy: {acc:.4f}, Precision: {precision:.4f}, Recall: {recall:.4f}, F1: {f1:.4f}, FP: {total_fp}")
+        logger.info(
+            f"✅ Accuracy: {acc:.4f}, Precision: {precision:.4f}, Recall: {recall:.4f}, F1: {f1:.4f}, FP: {total_fp}")
 
         fold_results.append((acc, precision, recall, f1))
         fold_times.append({
@@ -258,57 +283,69 @@ def cross_validate_with_smote(texts, labels, k=5, epochs=50, batch_size=32):
 
 
 if __name__ == "__main__":
-    # Load data
-    with open('label_dict.pkl', 'rb') as file:
-        labels_dic = pickle.load(file)
+    try:
+        # Log system info
+        logger.info(f"PyTorch version: {torch.__version__}")
+        logger.info(f"Using model: {model_name}")
 
-    df_train = pd.DataFrame(pd.read_csv('./unique_train_df.csv'))
-    df_test = pd.DataFrame(pd.read_csv('./unique_train_df.csv'))
-    df_train["cats"] = df_train["cats"].apply(ast.literal_eval)
-    df_test["cats"] = df_test["cats"].apply(ast.literal_eval)
-    df_train["text"] = df_train["text"].apply(
-        lambda x: ' '.join(map(str, x.tolist())) if isinstance(x, pd.Series) else str(x))
-    df_test["text"] = df_test["text"].apply(
-        lambda x: ' '.join(map(str, x.tolist())) if isinstance(x, pd.Series) else str(x))
+        # Load data
+        logger.info("Loading data...")
+        with open('label_dict.pkl', 'rb') as file:
+            labels_dic = pickle.load(file)
 
-    sentences = df_train["text"].tolist() + df_test["text"].tolist()
-    labels = []
-    for _, va in df_train["cats"].items():
-        for k, v in va.items():
-            if v == 1.0:
-                labels.append(k)
-    for _, va in df_test["cats"].items():
-        for k, v in va.items():
-            if v == 1.0:
-                labels.append(k)
+        df_train = pd.DataFrame(pd.read_csv('./unique_train_df.csv'))
+        df_test = pd.DataFrame(pd.read_csv('./unique_train_df.csv'))
+        df_train["cats"] = df_train["cats"].apply(ast.literal_eval)
+        df_test["cats"] = df_test["cats"].apply(ast.literal_eval)
+        df_train["text"] = df_train["text"].apply(
+            lambda x: ' '.join(map(str, x.tolist())) if isinstance(x, pd.Series) else str(x))
+        df_test["text"] = df_test["text"].apply(
+            lambda x: ' '.join(map(str, x.tolist())) if isinstance(x, pd.Series) else str(x))
 
-    labels_id = []
-    for lb in labels:
-        labels_id.append(labels_dic[lb])
+        sentences = df_train["text"].tolist() + df_test["text"].tolist()
+        labels = []
+        for _, va in df_train["cats"].items():
+            for k, v in va.items():
+                if v == 1.0:
+                    labels.append(k)
+        for _, va in df_test["cats"].items():
+            for k, v in va.items():
+                if v == 1.0:
+                    labels.append(k)
 
-    # Print initial class distribution
-    print("Initial class distribution:", Counter(labels_id))
+        labels_id = []
+        for lb in labels:
+            labels_id.append(labels_dic[lb])
 
-    # Run 5-fold CV with SMOTE and time measurements
-    start_time = time.time()
-    results, timing = cross_validate_with_smote(sentences, labels_id, k=5)
-    total_time = time.time() - start_time
+        # Print initial class distribution
+        logger.info(f"Initial class distribution: {dict(Counter(labels_id))}")
 
-    # Average metrics
-    results = np.array(results)
-    avg_metrics = results.mean(axis=0)
-    print("\n📈 Average Results with SMOTE:")
-    print(f"Accuracy: {avg_metrics[0]:.4f}")
-    print(f"Precision: {avg_metrics[1]:.4f}")
-    print(f"Recall: {avg_metrics[2]:.4f}")
-    print(f"F1 Score: {avg_metrics[3]:.4f}")
+        # Run 5-fold CV with SMOTE and time measurements
+        logger.info("Starting 5-fold cross-validation with SMOTE")
+        start_time = time.time()
+        results, timing = cross_validate_with_smote(sentences, labels_id, k=5)
+        total_time = time.time() - start_time
 
-    # Print timing summary
-    print("\n⏱️ TIMING SUMMARY FOR SMOTE IMPLEMENTATION:")
-    print(f"Average initialization time: {timing['init_time']:.2f} seconds")
-    print(f"Average embedding extraction time: {timing['embedding_time']:.2f} seconds")
-    print(f"Average SMOTE processing time: {timing['smote_time']:.2f} seconds")
-    print(f"Average training time: {timing['training_time']:.2f} seconds")
-    print(f"Average evaluation time: {timing['eval_time']:.2f} seconds")
-    print(f"Average total time per fold: {timing['total_time']:.2f} seconds")
-    print(f"Total execution time: {total_time:.2f} seconds")
+        # Average metrics
+        results = np.array(results)
+        avg_metrics = results.mean(axis=0)
+        logger.info("\n📈 Average Results with SMOTE:")
+        logger.info(f"Accuracy: {avg_metrics[0]:.4f}")
+        logger.info(f"Precision: {avg_metrics[1]:.4f}")
+        logger.info(f"Recall: {avg_metrics[2]:.4f}")
+        logger.info(f"F1 Score: {avg_metrics[3]:.4f}")
+
+        # Print timing summary
+        logger.info("\n⏱️ TIMING SUMMARY FOR STANDARD ROBERTA IMPLEMENTATION:")
+        logger.info(f"Average initialization time: {timing['init_time']:.2f} seconds")
+        logger.info(f"Average embedding extraction time: {timing['embedding_time']:.2f} seconds")
+        logger.info(f"Average SMOTE processing time: {timing['smote_time']:.2f} seconds")
+        logger.info(f"Average training time: {timing['training_time']:.2f} seconds")
+        logger.info(f"Average evaluation time: {timing['eval_time']:.2f} seconds")
+        logger.info(f"Average total time per fold: {timing['total_time']:.2f} seconds")
+        logger.info(f"Total execution time: {total_time:.2f} seconds")
+
+        logger.info(f"Log file saved to: {log_file}")
+
+    except Exception as e:
+        logger.exception(f"An error occurred during execution: {str(e)}")
