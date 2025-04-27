@@ -63,7 +63,7 @@ class CustomRobertaClassifier(nn.Module):
         loss = None
         if labels is not None:
             # Use the provided class_weights tensor in the loss function
-            loss_fn = nn.CrossEntropyLoss(weight=class_weights)  # Pass weights here!
+            loss_fn = nn.CrossEntropyLoss(weight=class_weights, label_smoothing=0.1)  # Pass weights here!
             # Ensure logits and labels have the correct shape for CrossEntropyLoss
             # Logits: (batch_size, num_classes), Labels: (batch_size)
             loss = loss_fn(logits.view(-1, self.num_labels), labels.view(-1))
@@ -312,6 +312,11 @@ def cross_validate(texts, labels, k=5, epochs=10, batch_size=16, learning_rate=5
         if not os.path.exists(fold_loss_dir):
             os.makedirs(fold_loss_dir)
 
+        #early stop
+        patience = 3
+        best_f1 = 0
+        epochs_no_improve = 0
+
         for epoch in range(epochs):
             epoch_start = time.time()
             print(f"\nEpoch {epoch + 1}/{epochs}")
@@ -363,11 +368,18 @@ def cross_validate(texts, labels, k=5, epochs=10, batch_size=16, learning_rate=5
                         "f1": f1
                     }
                 }
+                epochs_no_improve = 0
+            else:
+                epochs_no_improve += 1
 
             # Print epoch results with time
             print(f"Epoch completed in {timedelta(seconds=epoch_time)}")
             print(f"Train Loss: {train_loss:.4f}, Val Loss: {val_loss:.4f}")
             print(f"Accuracy: {acc:.4f}, Precision: {precision:.4f}, Recall: {recall:.4f}, F1: {f1:.4f}")
+
+            if epochs_no_improve >= patience:
+                print(f"Early stopping triggered at epoch {epoch + 1}")
+                break
 
         # Save complete fold history with step losses
         with open(f"{fold_loss_dir}/complete_fold_history.json", "w") as f:
@@ -520,9 +532,9 @@ if __name__ == "__main__":
     # Set training parameters
     params = {
         "k": 5,  # Number of folds
-        "epochs": 10,  # Number of training epochs
+        "epochs": 20,  # Number of training epochs
         "batch_size": 16,  # Batch size
-        "learning_rate": 1e-5  # Learning rate (slightly reduced for RoBERTa base)
+        "learning_rate": 2e-4  # Learning rate (slightly reduced for RoBERTa base)
     }
 
     # Start time measurement for the entire process
