@@ -522,7 +522,7 @@ if __name__ == "__main__":
         "k": 5,  # Number of folds
         "epochs": 10,  # Number of training epochs
         "batch_size": 16,  # Batch size
-        "learning_rate": 5e-6  # Learning rate (slightly reduced for RoBERTa base)
+        "learning_rate": 1e-5  # Learning rate (slightly reduced for RoBERTa base)
     }
 
     # Start time measurement for the entire process
