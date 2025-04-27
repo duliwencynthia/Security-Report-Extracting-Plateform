@@ -259,7 +259,7 @@ def cross_validate(texts, labels, k=5, epochs=30, batch_size=16, learning_rate=2
         optimizer = AdamW(model.parameters(), lr=learning_rate, weight_decay=0.01)
 
         # Learning rate scheduler: ReduceLROnPlateau
-        scheduler = ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=2, verbose=True)
+        scheduler = ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=2)
 
         fold_history = {"train_loss": [], "val_loss": [], "accuracy": [], "precision": [], "recall": [], "f1": [],
                         "epoch_times": []}
