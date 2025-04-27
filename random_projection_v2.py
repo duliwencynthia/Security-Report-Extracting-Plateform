@@ -37,27 +37,26 @@ tokenizer = RobertaTokenizer.from_pretrained("nanda-rani/TTPXHunter")
 
 
 class CustomRobertaClassifier(nn.Module):
-    def __init__(self, base_model, hidden_size, num_labels):
+    def __init__(self, base_model, hidden_size, num_labels, apply_random_projection=False, projection_dim=256):
         super().__init__()
         self.roberta = base_model
         self.dropout = nn.Dropout(0.1)
-        # Store num_labels for easy access
         self.num_labels = num_labels
         self.apply_random_projection = apply_random_projection
 
         if self.apply_random_projection:
-            # Initialize Random Projection layer
-            self.random_projector = GaussianRandomProjection(n_components=projection_dim)
-            # Projector expects NumPy arrays, so we need to wrap it properly
-            # Make a torch.nn.Linear layer initialized randomly to simulate the random projection
+            # Initialize Random Projection matrix manually
+            random_matrix = np.random.normal(size=(projection_dim, hidden_size)) / np.sqrt(projection_dim)
+            random_matrix = torch.tensor(random_matrix, dtype=torch.float32)
+
             self.projection_layer = nn.Linear(hidden_size, projection_dim, bias=False)
             with torch.no_grad():
-                self.projection_layer.weight.copy_(torch.tensor(self.random_projector.components_, dtype=torch.float))
+                self.projection_layer.weight.copy_(random_matrix)
+
             self.classifier = nn.Linear(projection_dim, num_labels)
         else:
             self.classifier = nn.Linear(hidden_size, num_labels)
 
-        # Add class_weights parameter with default None
     def forward(self, input_ids=None, attention_mask=None, labels=None, class_weights=None):
         outputs = self.roberta(input_ids=input_ids, attention_mask=attention_mask)
         last_hidden_state = outputs.last_hidden_state  # (batch_size, sequence_length, hidden_size)
