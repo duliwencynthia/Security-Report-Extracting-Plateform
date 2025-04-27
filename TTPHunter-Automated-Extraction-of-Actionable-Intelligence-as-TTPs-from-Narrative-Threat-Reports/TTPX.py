@@ -63,7 +63,7 @@ class CustomRobertaClassifier(nn.Module):
         loss = None
         if labels is not None:
             # Use the provided class_weights tensor in the loss function
-            loss_fn = nn.CrossEntropyLoss(weight=class_weights, label_smoothing=0.1)  # Pass weights here!
+            loss_fn = nn.CrossEntropyLoss(weight=class_weights)  # Pass weights here!
             # Ensure logits and labels have the correct shape for CrossEntropyLoss
             # Logits: (batch_size, num_classes), Labels: (batch_size)
             loss = loss_fn(logits.view(-1, self.num_labels), labels.view(-1))
