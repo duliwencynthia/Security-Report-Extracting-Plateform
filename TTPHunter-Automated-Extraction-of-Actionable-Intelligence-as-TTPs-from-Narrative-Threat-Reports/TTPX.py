@@ -535,6 +535,23 @@ if __name__ == "__main__":
     print("Max label id:", max(labels_id))
     print("Unique labels:", set(labels_id))
 
+    print(f"Original labels (before remapping): {sorted(set(labels_id))}")
+    print(f"Number of original classes: {len(set(labels_id))}")
+    # Create mapping old label ➔ new label
+    old_labels = sorted(list(set(labels_id)))
+    label_mapping = {old_label: new_label for new_label, old_label in enumerate(old_labels)}
+
+    # Apply mapping
+    labels_id = [label_mapping[label] for label in labels_id]
+
+    # (Optional) Save label mapping for future decoding
+    with open("label_mapping.json", "w") as f:
+        json.dump(label_mapping, f, indent=2)
+
+    print(f"📢 Final labels after remapping: {sorted(set(labels_id))}")
+    print(f"✅ Number of final classes: {len(set(labels_id))}")
+    print(f"✅ Total number of samples: {len(sentences)}")
+
     # Print dataset statistics
     print(f"Total samples: {len(sentences)}")
     print(f"Number of unique classes: {len(set(labels_id))}")
