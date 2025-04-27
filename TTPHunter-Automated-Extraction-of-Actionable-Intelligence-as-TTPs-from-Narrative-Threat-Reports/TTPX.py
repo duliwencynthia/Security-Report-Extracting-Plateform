@@ -6,6 +6,8 @@ import pandas as pd
 import numpy as np
 from torch.optim import AdamW
 from torch.utils.data import Dataset, DataLoader
+import torch.nn.functional as F
+from torch.optim.lr_scheduler import ReduceLROnPlateau
 from sklearn.model_selection import KFold
 from sklearn.metrics import accuracy_score, precision_recall_fscore_support, confusion_matrix
 from tqdm import tqdm
@@ -218,7 +220,7 @@ def save_model(model, tokenizer, fold, metrics, output_dir="saved_models"):
 
 
 # K-Fold Cross Validation with time tracking and learning rate scheduler
-def cross_validate(texts, labels, k=5, epochs=10, batch_size=16, learning_rate=5e-6):
+def cross_validate(texts, labels, k=5, epochs=30, batch_size=16, learning_rate=2e-5):
     kfold = KFold(n_splits=k, shuffle=True, random_state=42)
     fold_results = []
     fold_times = []
@@ -229,10 +231,7 @@ def cross_validate(texts, labels, k=5, epochs=10, batch_size=16, learning_rate=5
     all_step_losses = []  # Store all step losses across folds
 
     for fold, (train_idx, val_idx) in enumerate(kfold.split(texts)):
-        print(f"\n{'=' * 50}")
-        print(f"Fold {fold + 1}/{k}")
-        print(f"{'=' * 50}")
-
+        print(f"\n{'=' * 50}\nFold {fold + 1}/{k}\n{'=' * 50}")
         fold_start_time = time.time()
 
         train_texts = [texts[i] for i in train_idx]
@@ -240,41 +239,8 @@ def cross_validate(texts, labels, k=5, epochs=10, batch_size=16, learning_rate=5
         val_texts = [texts[i] for i in val_idx]
         val_labels = [labels[i] for i in val_idx]
 
-        print(f"Training set size: {len(train_texts)}")
-        print(f"Validation set size: {len(val_texts)}")
-        print("Train labels distribution:", np.bincount(train_labels))
-        print("Validation labels distribution:", np.bincount(val_labels))
-
-        print("Calculating class weights for weighted loss...")
-        num_labels = max(labels) + 1  # Or determine dynamically: len(np.unique(labels_id))
-        print("number_classes:", num_labels)
-        class_counts = np.bincount(train_labels, minlength=num_labels)
-
-        print(f"Train labels unique: {sorted(set(train_labels))}")
-        print(f"Validation labels unique: {sorted(set(val_labels))}")
-        print(f"Max label ID: {max(train_labels)}")
-        print(f"Number of classes (num_labels): {max(labels) + 1}")
-
-        # Handle potential zero counts if a class is missing in a fold's train set (rare with shuffle/stratify)
-        if np.any(class_counts == 0):
-            print(
-                f"Warning: Class counts for fold {fold + 1}: {class_counts}. Some classes might be missing in the training split.")
-            # Assign a very high weight or use a floor? Using inverse frequency might be unstable.
-            # A simple approach is to use 1 / (count + epsilon)
-            epsilon = 1e-6  # Small value to prevent division by zero
-            weights = 1.0 / (class_counts + epsilon)
-            # Normalize weights (optional, but can help)
-            weights = weights / np.sum(weights) * num_labels
-
-        else:
-            # Standard inverse frequency weighting
-            # Formula: weight = total_samples / (num_classes * count_per_class)
-            total_samples = len(train_labels)
-            weights = total_samples / (num_labels * class_counts)
-
-        print(f"Calculated weights: {weights}")
-        # Convert weights to a tensor and move to the device
-        class_weights_tensor = torch.tensor(weights, dtype=torch.float).to(device)
+        num_labels = len(set(labels))
+        print(f"number_classes: {num_labels}")
 
         train_dataset = TextDataset(train_texts, train_labels)
         val_dataset = TextDataset(val_texts, val_labels)
@@ -282,96 +248,87 @@ def cross_validate(texts, labels, k=5, epochs=10, batch_size=16, learning_rate=5
         train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
         val_loader = DataLoader(val_dataset, batch_size=batch_size)
 
-        # Model initialization - using RoBERTa base
         model = RobertaForSequenceClassification.from_pretrained(
             "roberta-base",
-            num_labels=num_labels
+            num_labels=num_labels,
+            hidden_dropout_prob=0.3,  # Increased dropout
+            attention_probs_dropout_prob=0.3
         )
-        for param in model.parameters():
-            param.requires_grad = True
-
         model.to(device)
 
-        # Create optimizer with weight decay
         optimizer = AdamW(model.parameters(), lr=learning_rate, weight_decay=0.01)
 
-        # Learning rate scheduler
-        total_steps = len(train_loader) * epochs
-        #scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=total_steps)
-        # Learning rate scheduler with warmup
-        total_steps = len(train_loader) * epochs
-        warmup_steps = int(0.05 * total_steps)  # 5% warmup
+        # Learning rate scheduler: ReduceLROnPlateau
+        scheduler = ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=2, verbose=True)
 
-        scheduler = get_cosine_schedule_with_warmup(
-            optimizer,
-            num_warmup_steps=warmup_steps,
-            num_training_steps=total_steps
-        )
+        fold_history = {"train_loss": [], "val_loss": [], "accuracy": [], "precision": [], "recall": [], "f1": [],
+                        "epoch_times": []}
 
-        # For tracking metrics
-        fold_history = {
-            "train_loss": [],
-            "val_loss": [],
-            "accuracy": [],
-            "precision": [],
-            "recall": [],
-            "f1": [],
-            "epoch_times": [],
-            "step_losses": []  # New tracking for step losses
-        }
-
-        # Training loop
         best_val_f1 = 0
         best_model_state = None
+        early_stopping_patience = 5
+        no_improve_epochs = 0
 
-        # Create fold loss directory
-        fold_loss_dir = f"fold_{fold + 1}_losses"
-        if not os.path.exists(fold_loss_dir):
-            os.makedirs(fold_loss_dir)
-
-        #early stop
-        patience = 3
-        best_f1 = 0
-        epochs_no_improve = 0
+        # Loss function (with optional class weights)
+        class_counts = np.bincount(train_labels, minlength=num_labels)
+        class_weights = torch.tensor(len(train_labels) / (num_labels * class_counts + 1e-9), dtype=torch.float32).to(
+            device)
+        loss_fn = torch.nn.CrossEntropyLoss(weight=class_weights)
 
         for epoch in range(epochs):
-            epoch_start = time.time()
+            epoch_start_time = time.time()
             print(f"\nEpoch {epoch + 1}/{epochs}")
 
-            # Train with detailed loss tracking
-            # train_loss, epoch_step_losses = train_model(model, train_loader, optimizer, scheduler, fold, epoch)
-            train_loss, epoch_step_losses = train_model(
-                model,
-                train_loader,
-                optimizer,
-                scheduler,
-                fold,
-                epoch,
-                class_weights=class_weights_tensor  # <-- Pass the tensor here
-            )
+            # Training
+            model.train()
+            total_train_loss = 0
+            for batch in tqdm(train_loader, desc="Training"):
+                batch = {k: v.to(device) for k, v in batch.items()}
+                outputs = model(input_ids=batch["input_ids"], attention_mask=batch["attention_mask"])
+                logits = outputs.logits
+                loss = loss_fn(logits, batch["labels"])
 
-            # Track all step losses
-            all_step_losses.extend(epoch_step_losses)
-            fold_history["step_losses"].extend(epoch_step_losses)
+                optimizer.zero_grad()
+                loss.backward()
+                torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+                optimizer.step()
 
-            # Save all step losses for this epoch
-            with open(f"{fold_loss_dir}/epoch_{epoch + 1}_losses.json", "w") as f:
-                json.dump(epoch_step_losses, f, indent=2)
+                total_train_loss += loss.item()
 
-            # Evaluate
-            acc, precision, recall, f1, total_fp, preds, val_loss = evaluate_model(model, val_loader)
+            avg_train_loss = total_train_loss / len(train_loader)
 
-            # Record metrics
-            epoch_time = time.time() - epoch_start
-            fold_history["train_loss"].append(train_loss)
-            fold_history["val_loss"].append(val_loss)
+            # Validation
+            model.eval()
+            preds, labels_true = [], []
+            total_val_loss = 0
+            with torch.no_grad():
+                for batch in tqdm(val_loader, desc="Evaluating"):
+                    batch = {k: v.to(device) for k, v in batch.items()}
+                    outputs = model(input_ids=batch["input_ids"], attention_mask=batch["attention_mask"])
+                    logits = outputs.logits
+                    loss = loss_fn(logits, batch["labels"])
+                    total_val_loss += loss.item()
+
+                    preds += torch.argmax(logits, dim=1).cpu().tolist()
+                    labels_true += batch["labels"].cpu().tolist()
+
+            avg_val_loss = total_val_loss / len(val_loader)
+            scheduler.step(avg_val_loss)
+
+            acc = accuracy_score(labels_true, preds)
+            precision, recall, f1, _ = precision_recall_fscore_support(labels_true, preds, average="weighted")
+
+            fold_history["train_loss"].append(avg_train_loss)
+            fold_history["val_loss"].append(avg_val_loss)
             fold_history["accuracy"].append(acc)
             fold_history["precision"].append(precision)
             fold_history["recall"].append(recall)
             fold_history["f1"].append(f1)
-            fold_history["epoch_times"].append(epoch_time)
+            fold_history["epoch_times"].append(time.time() - epoch_start_time)
 
-            # Save best model state
+            print(f"Train Loss: {avg_train_loss:.4f}, Val Loss: {avg_val_loss:.4f}")
+            print(f"Accuracy: {acc:.4f}, Precision: {precision:.4f}, Recall: {recall:.4f}, F1: {f1:.4f}")
+
             if f1 > best_val_f1:
                 best_val_f1 = f1
                 best_model_state = {
@@ -385,124 +342,25 @@ def cross_validate(texts, labels, k=5, epochs=10, batch_size=16, learning_rate=5
                         "f1": f1
                     }
                 }
-                epochs_no_improve = 0
+                no_improve_epochs = 0
             else:
-                epochs_no_improve += 1
+                no_improve_epochs += 1
 
-            # Print epoch results with time
-            print(f"Epoch completed in {timedelta(seconds=epoch_time)}")
-            print(f"Train Loss: {train_loss:.4f}, Val Loss: {val_loss:.4f}")
-            print(f"Accuracy: {acc:.4f}, Precision: {precision:.4f}, Recall: {recall:.4f}, F1: {f1:.4f}")
-
-            if epochs_no_improve >= patience:
-                print(f"Early stopping triggered at epoch {epoch + 1}")
+            if no_improve_epochs >= early_stopping_patience:
+                print("Early stopping triggered.")
                 break
 
-        # Save complete fold history with step losses
-        with open(f"{fold_loss_dir}/complete_fold_history.json", "w") as f:
-            json.dump(fold_history, f, indent=2)
+        # Save best model
+        fold_dir = f"saved_models/fold_{fold}"
+        os.makedirs(fold_dir, exist_ok=True)
+        torch.save(best_model_state, os.path.join(fold_dir, "model.pt"))
 
-        # Load the best model for final evaluation
-        if best_model_state:
-            model.load_state_dict(best_model_state["model_state_dict"])
-            print(f"\nLoaded best model from epoch {best_model_state['epoch'] + 1}")
-
-        # Final evaluation
-        acc, precision, recall, f1, total_fp, preds, val_loss = evaluate_model(model, val_loader)
-        print(f"\n✅ Final Evaluation:")
-        print(f"Accuracy: {acc:.4f}, Precision: {precision:.4f}, Recall: {recall:.4f}, F1: {f1:.4f}, FP: {total_fp}")
-
-        # Save best model checkpoint
-        save_model(model, tokenizer, fold, best_model_state["metrics"])
-
-        # Calculate fold time
-        fold_time = time.time() - fold_start_time
-        fold_times.append(fold_time)
-        print(f"Fold completed in {timedelta(seconds=fold_time)}")
-
-        # Store fold results
-        fold_results.append((acc, precision, recall, f1, total_fp))
-        fold_metrics.append(best_model_state["metrics"])
         training_history[f"fold_{fold + 1}"] = fold_history
+        fold_results.append((acc, precision, recall, f1))
+        fold_times.append(time.time() - fold_start_time)
+        fold_metrics.append(best_model_state["metrics"])
 
-        # Plot training curves for this fold
-        plt.figure(figsize=(12, 10))
-
-        # Loss curves
-        plt.subplot(2, 2, 1)
-        plt.plot(fold_history["train_loss"], label="Train Loss")
-        plt.plot(fold_history["val_loss"], label="Validation Loss")
-        plt.title(f"Fold {fold + 1} Loss Curves")
-        plt.xlabel("Epoch")
-        plt.ylabel("Loss")
-        plt.legend()
-
-        # Accuracy curve
-        plt.subplot(2, 2, 2)
-        plt.plot(fold_history["accuracy"])
-        plt.title(f"Fold {fold + 1} Accuracy")
-        plt.xlabel("Epoch")
-        plt.ylabel("Accuracy")
-
-        # F1 curve
-        plt.subplot(2, 2, 3)
-        plt.plot(fold_history["f1"])
-        plt.title(f"Fold {fold + 1} F1 Score")
-        plt.xlabel("Epoch")
-        plt.ylabel("F1")
-
-        # Precision-Recall curves
-        plt.subplot(2, 2, 4)
-        plt.plot(fold_history["precision"], label="Precision")
-        plt.plot(fold_history["recall"], label="Recall")
-        plt.title(f"Fold {fold + 1} Precision-Recall")
-        plt.xlabel("Epoch")
-        plt.ylabel("Score")
-        plt.legend()
-
-        plt.tight_layout()
-        plt.savefig(f"fold_{fold + 1}_training_curves.png")
-        plt.close()
-
-        # Generate and save confusion matrix
-        cm = confusion_matrix(val_labels, preds)
-        plt.figure(figsize=(10, 8))
-        sns.heatmap(cm, annot=True, fmt='d', cmap='Blues')
-        plt.title(f"Fold {fold + 1} Confusion Matrix")
-        plt.xlabel("Predicted Label")
-        plt.ylabel("True Label")
-        plt.savefig(f"fold_{fold + 1}_confusion_matrix.png")
-        plt.close()
-
-    # Save overall training history
-    with open("training_history.json", "w") as f:
-        json.dump(training_history, f)
-
-    # Save all step losses across all folds
-    with open("all_step_losses.json", "w") as f:
-        json.dump(all_step_losses, f, indent=2)
-
-    # Create global step loss visualization
-    plt.figure(figsize=(15, 8))
-
-    # Group by fold
-    for fold in range(k):
-        fold_steps = [s for s in all_step_losses if s["fold"] == fold]
-        if fold_steps:
-            steps = [s["step"] for s in fold_steps]
-            losses = [s["loss"] for s in fold_steps]
-            plt.plot(steps, losses, label=f"Fold {fold + 1}")
-
-    plt.title("Training Loss by Step Across All Folds")
-    plt.xlabel("Global Step")
-    plt.ylabel("Loss")
-    plt.legend()
-    plt.grid(True, linestyle='--', alpha=0.6)
-    plt.savefig("global_step_loss.png")
-    plt.close()
-
-    # Return complete results
-    return fold_results, fold_times, fold_metrics, training_history, all_step_losses
+    return fold_results, fold_times, fold_metrics, training_history
 
 
 # Main execution
@@ -571,7 +429,7 @@ if __name__ == "__main__":
     # Set training parameters
     params = {
         "k": 5,  # Number of folds
-        "epochs": 10,  # Number of training epochs
+        "epochs": 25,  # Number of training epochs
         "batch_size": 16,  # Batch size
         "learning_rate": 2e-5  # Learning rate (slightly reduced for RoBERTa base)
     }
