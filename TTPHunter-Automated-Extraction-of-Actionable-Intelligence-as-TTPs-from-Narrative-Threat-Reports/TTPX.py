@@ -545,8 +545,8 @@ if __name__ == "__main__":
     labels_id = [label_mapping[label] for label in labels_id]
 
     # (Optional) Save label mapping for future decoding
-    with open("label_mapping.json", "w") as f:
-        json.dump(label_mapping, f, indent=2)
+    # with open("label_mapping.json", "w") as f:
+    #     json.dump(label_mapping, f, indent=2)
 
     print(f"📢 Final labels after remapping: {sorted(set(labels_id))}")
     print(f"✅ Number of final classes: {len(set(labels_id))}")
