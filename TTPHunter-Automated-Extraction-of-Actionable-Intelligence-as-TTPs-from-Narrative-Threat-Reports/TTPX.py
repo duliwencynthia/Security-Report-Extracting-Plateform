@@ -45,34 +45,35 @@ class CustomRobertaClassifier(nn.Module):
         self.classifier = nn.Linear(hidden_size, num_labels)
 
         # Add class_weights parameter with default None
+
     def forward(self, input_ids=None, attention_mask=None, labels=None, class_weights=None):
         outputs = self.roberta(input_ids=input_ids, attention_mask=attention_mask)
-        # Use last_hidden_state and pool manually if pooler_output is unreliable
-        # For sequence classification, often the [CLS] token embedding is used
-        # last_hidden_state = outputs.last_hidden_state
-        # pooled_output = last_hidden_state[:, 0] # Get embedding of [CLS] token
 
-        # Using the default pooler output (trained during pre-training, might work)
-        #pooled_output = outputs.pooler_output
-        last_hidden_state = outputs.last_hidden_state  # (batch_size, sequence_length, hidden_size)
-        pooled_output = last_hidden_state.mean(dim=1)  # mean pooling over tokens
+        # Correct pooling: mean pooling over non-masked tokens
+        last_hidden_state = outputs.last_hidden_state  # (batch_size, seq_len, hidden_size)
+        attention_mask = attention_mask.unsqueeze(-1)  # (batch_size, seq_len, 1)
+
+        # Apply attention mask
+        masked_hidden_state = last_hidden_state * attention_mask
+        sum_hidden = masked_hidden_state.sum(dim=1)  # Sum over tokens
+        sum_mask = attention_mask.sum(dim=1)  # Number of valid tokens
+
+        # Avoid division by zero
+        sum_mask = torch.clamp(sum_mask, min=1e-9)
+
+        pooled_output = sum_hidden / sum_mask  # Mean pooling
 
         pooled_output = self.dropout(pooled_output)
         logits = self.classifier(pooled_output)
 
         loss = None
         if labels is not None:
-            # Use the provided class_weights tensor in the loss function
-            loss_fn = nn.CrossEntropyLoss(weight=class_weights)  # Pass weights here!
-            # Ensure logits and labels have the correct shape for CrossEntropyLoss
-            # Logits: (batch_size, num_classes), Labels: (batch_size)
+            loss_fn = nn.CrossEntropyLoss(weight=class_weights)
             loss = loss_fn(logits.view(-1, self.num_labels), labels.view(-1))
 
         return SequenceClassifierOutput(
             loss=loss,
             logits=logits,
-            # hidden_states=outputs.hidden_states, # Optional
-            # attentions=outputs.attentions, # Optional
         )
 
 
@@ -277,8 +278,10 @@ def cross_validate(texts, labels, k=5, epochs=10, batch_size=16, learning_rate=5
         val_loader = DataLoader(val_dataset, batch_size=batch_size)
 
         # Model initialization - using RoBERTa base
-        base_model = RobertaModel.from_pretrained("roberta-base")
-        model = CustomRobertaClassifier(base_model, hidden_size=768, num_labels=max(labels) + 1)
+        model = RobertaForSequenceClassification.from_pretrained(
+            "roberta-base",
+            num_labels=num_labels
+        )
         model.to(device)
 
         # Create optimizer with weight decay
