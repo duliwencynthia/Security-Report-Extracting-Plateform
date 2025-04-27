@@ -99,22 +99,26 @@ def train_model(model, train_loader, optimizer, scheduler=None, fold=0, epoch=0,
     step_losses = []
     global_step = epoch * num_batches
 
+    if class_weights is not None:
+        loss_fn = torch.nn.CrossEntropyLoss(weight=class_weights)
+    else:
+        loss_fn = torch.nn.CrossEntropyLoss()
+
     for batch_idx, batch in enumerate(tqdm(train_loader, desc="Training")):
         batch = {k: v.to(device) for k, v in batch.items()}
         # Move data to device BEFORE passing to model
-        batch_labels = batch["labels"].to(device)
-        batch_input_ids = batch["input_ids"].to(device)
-        batch_attention_mask = batch["attention_mask"].to(device)
+        batch_labels = batch["labels"]
+        batch_input_ids = batch["input_ids"]
+        batch_attention_mask = batch["attention_mask"]
         #outputs = model(**batch)
-        outputs = model(input_ids=batch_input_ids,
-                        attention_mask=batch_attention_mask,
-                        labels=batch_labels,
-                        class_weights=class_weights)  # <-- Pass weights here
-        loss = outputs.loss
+        outputs = model(input_ids=batch_input_ids, attention_mask=batch_attention_mask)
+        logits = outputs.logits
+        # Manually calculate loss
+        loss = loss_fn(logits.view(-1, model.num_labels), batch_labels.view(-1))
         batch_loss = loss.item()
         total_loss += batch_loss
 
-        # Track step-level loss
+        # Track step loss
         current_step = global_step + batch_idx + 1
         step_losses.append({
             "fold": fold,
@@ -124,16 +128,17 @@ def train_model(model, train_loader, optimizer, scheduler=None, fold=0, epoch=0,
             "loss": batch_loss
         })
 
-        # Print loss every 10 steps
         if (batch_idx + 1) % 10 == 0:
             print(f"Fold {fold + 1}, Epoch {epoch + 1}, Step {current_step}: Loss = {batch_loss:.6f}")
 
         loss.backward()
-        torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0) #added
+        torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
         optimizer.step()
         if scheduler:
             scheduler.step()
         optimizer.zero_grad()
+
+    return total_loss / num_batches, step_losses
 
     # Save step losses to file
     step_loss_file = f"fold_{fold + 1}_epoch_{epoch + 1}_step_losses.json"
