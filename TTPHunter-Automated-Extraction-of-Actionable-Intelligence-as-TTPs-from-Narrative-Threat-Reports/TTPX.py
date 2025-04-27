@@ -241,7 +241,13 @@ def cross_validate(texts, labels, k=5, epochs=10, batch_size=16, learning_rate=5
 
         print("Calculating class weights for weighted loss...")
         num_labels = max(labels) + 1  # Or determine dynamically: len(np.unique(labels_id))
+        print("number_classes:", num_labels)
         class_counts = np.bincount(train_labels, minlength=num_labels)
+
+        print(f"Train labels unique: {sorted(set(train_labels))}")
+        print(f"Validation labels unique: {sorted(set(val_labels))}")
+        print(f"Max label ID: {max(train_labels)}")
+        print(f"Number of classes (num_labels): {max(labels) + 1}")
 
         # Handle potential zero counts if a class is missing in a fold's train set (rare with shuffle/stratify)
         if np.any(class_counts == 0):
@@ -523,6 +529,11 @@ if __name__ == "__main__":
     labels_id = []
     for lb in labels:
         labels_id.append(labels_dic[lb])
+
+    #print("number of labels:", len(labels_id))
+    print("Min label id:", min(labels_id))
+    print("Max label id:", max(labels_id))
+    print("Unique labels:", set(labels_id))
 
     # Print dataset statistics
     print(f"Total samples: {len(sentences)}")
