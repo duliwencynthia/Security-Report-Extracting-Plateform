@@ -429,7 +429,7 @@ if __name__ == "__main__":
     # Set training parameters
     params = {
         "k": 5,  # Number of folds
-        "epochs": 25,  # Number of training epochs
+        "epochs": 30,  # Number of training epochs
         "batch_size": 16,  # Batch size
         "learning_rate": 2e-5  # Learning rate (slightly reduced for RoBERTa base)
     }
