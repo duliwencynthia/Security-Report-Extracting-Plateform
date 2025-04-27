@@ -287,6 +287,9 @@ def cross_validate(texts, labels, k=5, epochs=10, batch_size=16, learning_rate=5
             "roberta-base",
             num_labels=num_labels
         )
+        for param in model.parameters():
+            param.requires_grad = True
+
         model.to(device)
 
         # Create optimizer with weight decay
@@ -568,9 +571,9 @@ if __name__ == "__main__":
     # Set training parameters
     params = {
         "k": 5,  # Number of folds
-        "epochs": 20,  # Number of training epochs
+        "epochs": 10,  # Number of training epochs
         "batch_size": 16,  # Batch size
-        "learning_rate": 2e-4  # Learning rate (slightly reduced for RoBERTa base)
+        "learning_rate": 2e-5  # Learning rate (slightly reduced for RoBERTa base)
     }
 
     # Start time measurement for the entire process
