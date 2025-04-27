@@ -32,7 +32,7 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(f"Using device: {device}")
 
 # Load RoBERTa base tokenizer instead of TTPXHunter
-tokenizer = RobertaTokenizer.from_pretrained("nanda-rani/TTPXHunter")
+tokenizer = RobertaTokenizer.from_pretrained("roberta-base")
 
 
 class CustomRobertaClassifier(nn.Module):
@@ -53,7 +53,9 @@ class CustomRobertaClassifier(nn.Module):
         # pooled_output = last_hidden_state[:, 0] # Get embedding of [CLS] token
 
         # Using the default pooler output (trained during pre-training, might work)
-        pooled_output = outputs.pooler_output
+        #pooled_output = outputs.pooler_output
+        last_hidden_state = outputs.last_hidden_state  # (batch_size, sequence_length, hidden_size)
+        pooled_output = last_hidden_state.mean(dim=1)  # mean pooling over tokens
 
         pooled_output = self.dropout(pooled_output)
         logits = self.classifier(pooled_output)
@@ -210,7 +212,7 @@ def save_model(model, tokenizer, fold, metrics, output_dir="saved_models"):
 
 
 # K-Fold Cross Validation with time tracking and learning rate scheduler
-def cross_validate(texts, labels, k=5, epochs=10, batch_size=16, learning_rate=5e-4):
+def cross_validate(texts, labels, k=5, epochs=10, batch_size=16, learning_rate=5e-6):
     kfold = KFold(n_splits=k, shuffle=True, random_state=42)
     fold_results = []
     fold_times = []
@@ -269,7 +271,7 @@ def cross_validate(texts, labels, k=5, epochs=10, batch_size=16, learning_rate=5
         val_loader = DataLoader(val_dataset, batch_size=batch_size)
 
         # Model initialization - using RoBERTa base
-        base_model = RobertaModel.from_pretrained("nanda-rani/TTPXHunter")
+        base_model = RobertaModel.from_pretrained("roberta-base")
         model = CustomRobertaClassifier(base_model, hidden_size=768, num_labels=max(labels) + 1)
         model.to(device)
 
@@ -520,7 +522,7 @@ if __name__ == "__main__":
         "k": 5,  # Number of folds
         "epochs": 10,  # Number of training epochs
         "batch_size": 16,  # Batch size
-        "learning_rate": 5e-4  # Learning rate (slightly reduced for RoBERTa base)
+        "learning_rate": 5e-6  # Learning rate (slightly reduced for RoBERTa base)
     }
 
     # Start time measurement for the entire process
