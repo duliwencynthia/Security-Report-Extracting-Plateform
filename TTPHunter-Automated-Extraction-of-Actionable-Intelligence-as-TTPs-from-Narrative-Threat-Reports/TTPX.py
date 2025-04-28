@@ -219,7 +219,7 @@ def save_model(model, tokenizer, fold, metrics, output_dir="saved_models"):
 
 
 # K-Fold Cross Validation with time tracking and learning rate scheduler
-def cross_validate(texts, labels, k=5, epochs=30, batch_size=16, learning_rate=2e-5):
+def cross_validate(texts, labels, k=5, epochs=30, batch_size=16, learning_rate=3e-5):
     kfold = KFold(n_splits=k, shuffle=True, random_state=42)
     fold_results = []
     fold_times = []
@@ -256,14 +256,26 @@ def cross_validate(texts, labels, k=5, epochs=30, batch_size=16, learning_rate=2
         model.to(device)
 
         optimizer = AdamW(model.parameters(), lr=learning_rate, weight_decay=0.01)
+        # Total number of training steps
+        total_steps = len(train_loader) * epochs  # total batches × epochs
+
+        # Set warmup steps (usually 10% of total steps)
+        warmup_steps = int(0.1 * total_steps)
+
+        # Create Warmup + CosineAnnealing Scheduler
+        scheduler = get_cosine_schedule_with_warmup(
+            optimizer,
+            num_warmup_steps=warmup_steps,
+            num_training_steps=total_steps
+        )
 
         # Learning rate scheduler: ReduceLROnPlateau
-        scheduler = CosineAnnealingWarmRestarts(
-            optimizer,
-            T_0=5,  # Number of epochs before first restart (you can tune)
-            T_mult=2,  # Multiplying factor
-            eta_min=1e-6  # Minimum learning rate
-        )
+        # scheduler = CosineAnnealingWarmRestarts(
+        #     optimizer,
+        #     T_0=5,  # Number of epochs before first restart (you can tune)
+        #     T_mult=2,  # Multiplying factor
+        #     eta_min=1e-6  # Minimum learning rate
+        # )
 
         fold_history = {"train_loss": [], "val_loss": [], "accuracy": [], "precision": [], "recall": [], "f1": [],
                         "epoch_times": []}
@@ -292,10 +304,11 @@ def cross_validate(texts, labels, k=5, epochs=30, batch_size=16, learning_rate=2
                 logits = outputs.logits
                 loss = loss_fn(logits, batch["labels"])
 
-                optimizer.zero_grad()
                 loss.backward()
                 torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
                 optimizer.step()
+                scheduler.step()
+                optimizer.zero_grad()
 
                 total_train_loss += loss.item()
 
@@ -435,7 +448,7 @@ if __name__ == "__main__":
         "k": 5,  # Number of folds
         "epochs": 30,  # Number of training epochs
         "batch_size": 16,  # Batch size
-        "learning_rate": 2e-5  # Learning rate (slightly reduced for RoBERTa base)
+        "learning_rate": 3e-5  # Learning rate (slightly reduced for RoBERTa base)
     }
 
     # Start time measurement for the entire process
