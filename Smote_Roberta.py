@@ -1,31 +1,25 @@
-from transformers import RobertaTokenizer, RobertaForSequenceClassification
+from transformers import RobertaTokenizer, RobertaForSequenceClassification, RobertaModel
 import pickle
 import torch
-import os
 import pandas as pd
 import numpy as np
 from torch.optim import AdamW
 from torch.utils.data import Dataset, DataLoader
-import torch.nn.functional as F
-from torch.optim.lr_scheduler import  CosineAnnealingWarmRestarts
 from sklearn.model_selection import KFold
 from sklearn.metrics import accuracy_score, precision_recall_fscore_support, confusion_matrix
 from tqdm import tqdm
-from transformers import RobertaConfig, RobertaModel
 import torch.nn as nn
-import json
-import seaborn as sns
-import matplotlib.pyplot as plt
-import ast
-import time
-from datetime import timedelta
 from transformers.modeling_outputs import SequenceClassifierOutput
+from imblearn.over_sampling import SMOTE
+import time
+import ast
+import os
+from collections import Counter
 from transformers import get_cosine_schedule_with_warmup
-import torch.backends.cudnn as cudnn
 
-cudnn.benchmark = False
-cudnn.deterministic = True
-torch.cuda.empty_cache()
+# cudnn.benchmark = False
+# cudnn.deterministic = True
+# torch.cuda.empty_cache()
 
 os.environ["CUDA_LAUNCH_BLOCKING"] = "1"
 
