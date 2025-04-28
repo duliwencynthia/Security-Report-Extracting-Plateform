@@ -34,7 +34,7 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(f"Using device: {device}")
 
 # Load RoBERTa base tokenizer instead of TTPXHunter
-tokenizer = RobertaTokenizer.from_pretrained("roberta-base")
+tokenizer = RobertaTokenizer.from_pretrained("nanda-rani/TTPXHunter")
 
 
 class CustomRobertaClassifier(nn.Module):
@@ -249,7 +249,7 @@ def cross_validate(texts, labels, k=5, epochs=30, batch_size=16, learning_rate=5
         val_loader = DataLoader(val_dataset, batch_size=batch_size)
 
         model = RobertaForSequenceClassification.from_pretrained(
-            "roberta-base",
+            "nanda-rani/TTPXHunter",
             num_labels=num_labels,
             hidden_dropout_prob=0.3,  # Increased dropout
             attention_probs_dropout_prob=0.3
