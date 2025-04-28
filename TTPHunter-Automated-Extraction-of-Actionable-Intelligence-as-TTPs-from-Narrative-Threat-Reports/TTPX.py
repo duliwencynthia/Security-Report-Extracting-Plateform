@@ -326,7 +326,7 @@ def cross_validate(texts, labels, k=5, epochs=30, batch_size=16, learning_rate=5
             fold_history["f1"].append(f1)
             fold_history["epoch_times"].append(time.time() - epoch_start_time)
 
-            print(f"Train Loss: {avg_train_loss:.4f}, Val Loss: {avg_val_loss:.4f}")
+            print(f"Train Loss: {avg_train_loss:.4f}, Val Loss: {val_loss:.4f}")
             print(f"Accuracy: {acc:.4f}, Precision: {precision:.4f}, Recall: {recall:.4f}, F1: {f1:.4f}")
 
             if f1 > best_val_f1:
