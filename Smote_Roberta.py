@@ -245,7 +245,7 @@ def extract_embeddings(texts, tokenizer, model, batch_size=32):
     return torch.cat(embeddings, dim=0)
 
 def apply_smote(embeddings, labels):
-    smote = SMOTE(k_neighbors=2)
+    smote = SMOTE(k_neighbors=1)
     embeddings_resampled, labels_resampled = smote.fit_resample(embeddings.numpy(), np.array(labels))
     return torch.tensor(embeddings_resampled), torch.tensor(labels_resampled)
 
