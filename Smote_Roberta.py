@@ -43,7 +43,8 @@ class CustomRobertaClassifier(nn.Module):
         # Add class_weights parameter with default None
 
     def forward(self, input_ids=None, attention_mask=None, labels=None, class_weights=None):
-        outputs = self.roberta(input_ids=input_ids, attention_mask=attention_mask)
+        #outputs = self.roberta(input_ids=input_ids, attention_mask=attention_mask)
+        outputs = model(batch["embedding"].to(device))
 
         # Correct pooling: mean pooling over non-masked tokens
         last_hidden_state = outputs.last_hidden_state  # (batch_size, seq_len, hidden_size)
@@ -65,12 +66,27 @@ class CustomRobertaClassifier(nn.Module):
         loss = None
         if labels is not None:
             loss_fn = nn.CrossEntropyLoss(weight=class_weights)
-            loss = loss_fn(logits.view(-1, self.num_labels), labels.view(-1))
+            #loss = loss_fn(logits.view(-1, self.num_labels), labels.view(-1))
+            loss = loss_fn(outputs, batch["labels"])
 
         return SequenceClassifierOutput(
             loss=loss,
             logits=logits,
         )
+
+class EmbeddingClassifier(nn.Module):
+    def __init__(self, embedding_dim, num_labels):
+        super().__init__()
+        self.classifier = nn.Sequential(
+            nn.Linear(embedding_dim, 512),
+            nn.ReLU(),
+            nn.Dropout(0.3),
+            nn.Linear(512, num_labels)
+        )
+
+    def forward(self, embeddings):
+        logits = self.classifier(embeddings)
+        return logits
 
 class TextDataset(Dataset):
     def __init__(self, texts, labels):
@@ -293,13 +309,18 @@ def cross_validate(texts, labels, k=5, epochs=30, batch_size=16, learning_rate=5
         train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
         val_loader = DataLoader(val_dataset, batch_size=batch_size)
 
-        model = RobertaForSequenceClassification.from_pretrained(
-            "nanda-rani/TTPXHunter",
-            num_labels=num_labels,
-            hidden_dropout_prob=0.3,  # Increased dropout
-            attention_probs_dropout_prob=0.3,
-            ignore_mismatched_sizes=True
-        )
+        embedding_dim = sentence_embeddings.shape[1]  # usually 768
+        num_labels = len(set(labels_id))
+
+        model = EmbeddingClassifier(embedding_dim=embedding_dim, num_labels=num_labels)
+        model.to(device)
+        # model = RobertaForSequenceClassification.from_pretrained(
+        #     "nanda-rani/TTPXHunter",
+        #     num_labels=num_labels,
+        #     hidden_dropout_prob=0.3,  # Increased dropout
+        #     attention_probs_dropout_prob=0.3,
+        #     ignore_mismatched_sizes=True
+        # )
         model.to(device)
 
         optimizer = AdamW(model.parameters(), lr=learning_rate, weight_decay=0.01)
