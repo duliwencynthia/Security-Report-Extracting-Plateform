@@ -431,9 +431,12 @@ if __name__ == "__main__":
 
     # Convert labels to IDs
     labels_id = []
-    for lb in labels:
-        print(lb)
-        labels_id.append(labels_dic[lb])
+    for i in range(len(labels)):
+        lb = labels[i]
+        if lb:
+            labels_id.append(labels_dic[lb])
+        else:
+            sentences.pop(i)
 
     #print("number of labels:", len(labels_id))
     print("Min label id:", min(labels_id))

@@ -455,11 +455,15 @@ if __name__ == "__main__":
     #sentences = df_train["text"].tolist() + df_test["text"].tolist()
     sentences = df_train["text"].tolist()
     labels = []
-    for _, va in df_train["cats"].items():
-        for k, v in va.items():
+    for cats in df_train["cats"]:
+        first_label = None
+        for k, v in cats.items():
             if v == 1.0:
-                labels.append(k)
+                first_label = k
                 break
+        labels.append(first_label)
+
+    assert len(sentences) == len(labels)
     # for _, va in df_test["cats"].items():
     #     for k, v in va.items():
     #         if v == 1.0:
@@ -467,9 +471,12 @@ if __name__ == "__main__":
 
     # Convert labels to IDs
     labels_id = []
-    for lb in labels:
-        labels_id.append(labels_dic[lb])
-
+    for i in range(len(labels)):
+        lb = labels[i]
+        if lb:
+            labels_id.append(labels_dic[lb])
+        else:
+            sentences.pop(i)
     #print("number of labels:", len(labels_id))
     print("Min label id:", min(labels_id))
     print("Max label id:", max(labels_id))
