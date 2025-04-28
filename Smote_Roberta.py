@@ -17,6 +17,7 @@ import ast
 import logging
 import os
 from datetime import datetime
+from collections import Counter
 
 # cudnn.benchmark = False
 # cudnn.deterministic = True
@@ -99,6 +100,22 @@ class EmbeddingDataset(Dataset):
 
     def __len__(self):
         return len(self.labels)
+
+
+def filter_small_classes(sentences, labels_id, min_samples=2):
+    counts = Counter(labels_id)
+    valid_classes = {cls for cls, count in counts.items() if count >= min_samples}
+
+    filtered_sentences = []
+    filtered_labels = []
+
+    for sent, label in zip(sentences, labels_id):
+        if label in valid_classes:
+            filtered_sentences.append(sent)
+            filtered_labels.append(label)
+
+    print(f"✅ After filtering: {len(filtered_sentences)} samples, {len(set(filtered_labels))} classes")
+    return filtered_sentences, filtered_labels
 
 
 # Training function with detailed loss tracking
@@ -464,6 +481,8 @@ if __name__ == "__main__":
     print(f"Total samples: {len(sentences)}")
     print(f"Number of unique classes: {len(set(labels_id))}")
     print(f"Class distribution: {np.bincount(labels_id)}")
+
+    sentences, labels_id = filter_small_classes(sentences, labels_id, min_samples=2)
 
     # Load model backbone (RoBERTa without classifier head)
     base_model = RobertaModel.from_pretrained("nanda-rani/TTPXHunter", output_hidden_states=True)
