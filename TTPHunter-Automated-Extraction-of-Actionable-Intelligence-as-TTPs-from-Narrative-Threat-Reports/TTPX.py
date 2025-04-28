@@ -164,32 +164,33 @@ def train_model(model, train_loader, optimizer, scheduler=None, fold=0, epoch=0,
 
 
 # Evaluation function
-def evaluate_model(model, val_loader):
+def evaluate_model(model, val_loader, loss_fn):
     model.eval()
-    preds, labels = [], []
-    total_loss = 0
-    num_batches = len(val_loader)
+    preds, labels_true = [], []
+    total_val_loss = 0
 
     with torch.no_grad():
-        for batch in tqdm(val_loader, desc="Evaluating"):
+        for batch in val_loader:
             batch = {k: v.to(device) for k, v in batch.items()}
-            outputs = model(**batch)
+            outputs = model(input_ids=batch["input_ids"], attention_mask=batch["attention_mask"])
             logits = outputs.logits
-            loss = outputs.loss
-            total_loss += loss.item()
+            loss = loss_fn(logits, batch["labels"])
 
+            total_val_loss += loss.item()
             preds += torch.argmax(logits, dim=1).cpu().tolist()
-            labels += batch["labels"].cpu().tolist()
+            labels_true += batch["labels"].cpu().tolist()
 
-    acc = accuracy_score(labels, preds)
-    precision, recall, f1, _ = precision_recall_fscore_support(labels, preds, average="weighted")
+    avg_val_loss = total_val_loss / len(val_loader)
 
-    # Calculate confusion matrix and extract false positives
-    cm = confusion_matrix(labels, preds)
-    fp = cm.sum(axis=0) - np.diag(cm)  # false positives per class
-    total_fp = fp.sum()  # total false positives
+    acc = accuracy_score(labels_true, preds)
+    precision, recall, f1, _ = precision_recall_fscore_support(labels_true, preds, average="weighted")
 
-    return acc, precision, recall, f1, total_fp, preds, total_loss / num_batches
+    # ⚡ Now calculate False Positives
+    cm = confusion_matrix(labels_true, preds)
+    fp_per_class = cm.sum(axis=0) - np.diag(cm)  # false positives per class
+    total_fp = fp_per_class.sum()
+
+    return avg_val_loss, acc, precision, recall, f1, total_fp
 
 
 # Save model function
@@ -219,7 +220,7 @@ def save_model(model, tokenizer, fold, metrics, output_dir="saved_models"):
 
 
 # K-Fold Cross Validation with time tracking and learning rate scheduler
-def cross_validate(texts, labels, k=5, epochs=30, batch_size=16, learning_rate=3e-5):
+def cross_validate(texts, labels, k=5, epochs=30, batch_size=16, learning_rate=5e-5):
     kfold = KFold(n_splits=k, shuffle=True, random_state=42)
     fold_results = []
     fold_times = []
@@ -314,26 +315,7 @@ def cross_validate(texts, labels, k=5, epochs=30, batch_size=16, learning_rate=3
 
             avg_train_loss = total_train_loss / len(train_loader)
 
-            # Validation
-            model.eval()
-            preds, labels_true = [], []
-            total_val_loss = 0
-            with torch.no_grad():
-                for batch in tqdm(val_loader, desc="Evaluating"):
-                    batch = {k: v.to(device) for k, v in batch.items()}
-                    outputs = model(input_ids=batch["input_ids"], attention_mask=batch["attention_mask"])
-                    logits = outputs.logits
-                    loss = loss_fn(logits, batch["labels"])
-                    total_val_loss += loss.item()
-
-                    preds += torch.argmax(logits, dim=1).cpu().tolist()
-                    labels_true += batch["labels"].cpu().tolist()
-
-            avg_val_loss = total_val_loss / len(val_loader)
-            scheduler.step(avg_val_loss)
-
-            acc = accuracy_score(labels_true, preds)
-            precision, recall, f1, _ = precision_recall_fscore_support(labels_true, preds, average="weighted")
+            val_loss, acc, precision, recall, f1, total_fp = evaluate_model(model, val_loader, loss_fn)
 
             fold_history["train_loss"].append(avg_train_loss)
             fold_history["val_loss"].append(avg_val_loss)
@@ -373,7 +355,7 @@ def cross_validate(texts, labels, k=5, epochs=30, batch_size=16, learning_rate=3
         torch.save(best_model_state, os.path.join(fold_dir, "model.pt"))
 
         training_history[f"fold_{fold + 1}"] = fold_history
-        fold_results.append((acc, precision, recall, f1))
+        fold_results.append((acc, precision, recall, f1, total_fp))
         fold_times.append(time.time() - fold_start_time)
         fold_metrics.append(best_model_state["metrics"])
 
@@ -448,7 +430,7 @@ if __name__ == "__main__":
         "k": 5,  # Number of folds
         "epochs": 30,  # Number of training epochs
         "batch_size": 16,  # Batch size
-        "learning_rate": 3e-5  # Learning rate (slightly reduced for RoBERTa base)
+        "learning_rate": 5e-5  # Learning rate (slightly reduced for RoBERTa base)
     }
 
     # Start time measurement for the entire process
