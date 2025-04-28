@@ -148,7 +148,9 @@ class RandomProjectionSynthesizer:
                 queue = [(X_label, texts_label, labels_label)]
                 while queue:
                     X_c, texts_c, labels_c = queue.pop(0)
-                    if len(texts_c) <= 5:
+                    if len(texts_c) ==0:
+                        continue
+                    elif len(texts_c) <= 5:
                         # Mutate within small cluster
                         for _ in range(self.synthetic_multiplier):
                             anchor = random.choice(texts_c)
