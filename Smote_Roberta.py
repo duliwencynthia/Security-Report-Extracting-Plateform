@@ -386,12 +386,12 @@ if __name__ == "__main__":
     print("Loading data...")
 
     # Load label dictionary
-    with open('../label_dict.pkl', 'rb') as file:
+    with open('label_dict.pkl', 'rb') as file:
         labels_dic = pickle.load(file)
 
     # Load datasets
-    df_train = pd.DataFrame(pd.read_csv('../unique_train_df.csv'))
-    df_test = pd.DataFrame(pd.read_csv('../unique_train_df.csv'))
+    df_train = pd.DataFrame(pd.read_csv('unique_train_df.csv'))
+    df_test = pd.DataFrame(pd.read_csv('unique_train_df.csv'))
     df_train["cats"] = df_train["cats"].apply(ast.literal_eval)
     df_test["cats"] = df_test["cats"].apply(ast.literal_eval)
     df_train["text"] = df_train["text"].apply(
