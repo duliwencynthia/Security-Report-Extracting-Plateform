@@ -439,7 +439,7 @@ if __name__ == "__main__":
 
     # Run cross-validation
     print(f"\nStarting {params['k']}-fold cross-validation with {params['epochs']} epochs using RoBERTa-base...")
-    results, fold_times, fold_metrics, training_history, all_step_losses = cross_validate(
+    results, fold_times, fold_metrics, training_history = cross_validate(
         sentences,
         labels_id,
         k=params["k"],
