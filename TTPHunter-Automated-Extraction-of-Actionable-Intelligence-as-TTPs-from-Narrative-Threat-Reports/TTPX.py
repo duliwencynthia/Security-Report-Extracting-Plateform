@@ -319,7 +319,7 @@ def cross_validate(texts, labels, k=5, epochs=30, batch_size=16, learning_rate=5
             val_loss, acc, precision, recall, f1, total_fp = evaluate_model(model, val_loader, loss_fn)
 
             fold_history["train_loss"].append(avg_train_loss)
-            fold_history["val_loss"].append(avg_val_loss)
+            fold_history["val_loss"].append(val_loss)
             fold_history["accuracy"].append(acc)
             fold_history["precision"].append(precision)
             fold_history["recall"].append(recall)
