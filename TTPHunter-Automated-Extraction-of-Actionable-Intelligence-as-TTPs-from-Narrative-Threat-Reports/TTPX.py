@@ -252,7 +252,8 @@ def cross_validate(texts, labels, k=5, epochs=30, batch_size=16, learning_rate=5
             "nanda-rani/TTPXHunter",
             num_labels=num_labels,
             hidden_dropout_prob=0.3,  # Increased dropout
-            attention_probs_dropout_prob=0.3
+            attention_probs_dropout_prob=0.3,
+            ignore_mismatched_sizes=True
         )
         model.to(device)
 
