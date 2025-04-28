@@ -400,13 +400,13 @@ if __name__ == "__main__":
     #             labels.append(k)
 
     # Convert labels to IDs
+    new_sentences = []
     labels_id = []
-    for i in range(len(labels)):
-        lb = labels[i]
+    for sent, lb in zip(sentences, labels):
         if lb:
+            new_sentences.append(sent)
             labels_id.append(labels_dic[lb])
-        else:
-            sentences.pop(i)
+    sentences = new_sentences
 
     #print("number of labels:", len(labels_id))
     print("Min label id:", min(labels_id))
