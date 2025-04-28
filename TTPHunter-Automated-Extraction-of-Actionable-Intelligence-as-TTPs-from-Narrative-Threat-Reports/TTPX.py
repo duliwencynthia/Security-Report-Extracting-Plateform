@@ -7,7 +7,7 @@ import numpy as np
 from torch.optim import AdamW
 from torch.utils.data import Dataset, DataLoader
 import torch.nn.functional as F
-from torch.optim.lr_scheduler import ReduceLROnPlateau
+from torch.optim.lr_scheduler import  CosineAnnealingWarmRestarts
 from sklearn.model_selection import KFold
 from sklearn.metrics import accuracy_score, precision_recall_fscore_support, confusion_matrix
 from tqdm import tqdm
@@ -136,8 +136,7 @@ def train_model(model, train_loader, optimizer, scheduler=None, fold=0, epoch=0,
         loss.backward()
         torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
         optimizer.step()
-        if scheduler:
-            scheduler.step()
+        scheduler.step(epoch + batch_idx / len(train_loader))
         optimizer.zero_grad()
 
     return total_loss / num_batches, step_losses
@@ -259,7 +258,12 @@ def cross_validate(texts, labels, k=5, epochs=30, batch_size=16, learning_rate=2
         optimizer = AdamW(model.parameters(), lr=learning_rate, weight_decay=0.01)
 
         # Learning rate scheduler: ReduceLROnPlateau
-        scheduler = ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=2)
+        scheduler = CosineAnnealingWarmRestarts(
+            optimizer,
+            T_0=5,  # Number of epochs before first restart (you can tune)
+            T_mult=2,  # Multiplying factor
+            eta_min=1e-6  # Minimum learning rate
+        )
 
         fold_history = {"train_loss": [], "val_loss": [], "accuracy": [], "precision": [], "recall": [], "f1": [],
                         "epoch_times": []}
