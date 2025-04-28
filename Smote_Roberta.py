@@ -423,7 +423,7 @@ if __name__ == "__main__":
                 break
         labels.append(first_label)
 
-    print(assert len(sentences) == len(labels))
+    print(f'length of sentences: {len(sentences)}, length of labels: {len(labels)}')
     # for _, va in df_test["cats"].items():
     #     for k, v in va.items():
     #         if v == 1.0:
