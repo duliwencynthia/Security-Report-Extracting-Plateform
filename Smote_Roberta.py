@@ -257,6 +257,34 @@ def save_model(model, tokenizer, fold, metrics, output_dir="saved_models"):
 
     print(f"Model and metrics saved to {fold_dir}")
 
+def evaluate_model_embeddings(model, val_loader, loss_fn):
+    model.eval()
+    preds, labels_true = [], []
+    total_val_loss = 0
+
+    with torch.no_grad():
+        for batch in val_loader:
+            batch_embeddings = batch["embedding"].to(device)
+            batch_labels = batch["labels"].to(device)
+
+            logits = model(batch_embeddings)
+            loss = loss_fn(logits, batch_labels)
+
+            total_val_loss += loss.item()
+            preds += torch.argmax(logits, dim=1).cpu().tolist()
+            labels_true += batch_labels.cpu().tolist()
+
+    avg_val_loss = total_val_loss / len(val_loader)
+
+    acc = accuracy_score(labels_true, preds)
+    precision, recall, f1, _ = precision_recall_fscore_support(labels_true, preds, average="weighted")
+
+    cm = confusion_matrix(labels_true, preds)
+    fp_per_class = cm.sum(axis=0) - np.diag(cm)
+    total_fp = fp_per_class.sum()
+
+    return avg_val_loss, acc, precision, recall, f1, total_fp
+
 def extract_embeddings(texts, tokenizer, model, batch_size=32):
     model.eval()
     dataset = TextDataset(texts, [0]*len(texts))  # dummy labels
@@ -281,96 +309,72 @@ def apply_smote(embeddings, labels):
     return torch.tensor(embeddings_resampled), torch.tensor(labels_resampled)
 
 # K-Fold Cross Validation with time tracking and learning rate scheduler
-def cross_validate(texts, labels, k=5, epochs=30, batch_size=16, learning_rate=5e-5):
+def cross_validate_embeddings(embeddings, labels, k=5, epochs=30, batch_size=32, learning_rate=5e-4):
     kfold = KFold(n_splits=k, shuffle=True, random_state=42)
     fold_results = []
     fold_times = []
     fold_metrics = []
-
-    # For storing detailed training metrics
     training_history = {}
-    all_step_losses = []  # Store all step losses across folds
 
-    for fold, (train_idx, val_idx) in enumerate(kfold.split(texts)):
+    num_labels = len(set(labels))
+    embedding_dim = embeddings.shape[1]  # usually 768 for RoBERTa base
+
+    for fold, (train_idx, val_idx) in enumerate(kfold.split(embeddings)):
         print(f"\n{'=' * 50}\nFold {fold + 1}/{k}\n{'=' * 50}")
         fold_start_time = time.time()
 
-        train_texts = [texts[i] for i in train_idx]
-        train_labels = [labels[i] for i in train_idx]
-        val_texts = [texts[i] for i in val_idx]
-        val_labels = [labels[i] for i in val_idx]
+        train_embeddings = embeddings[train_idx]
+        train_labels = labels[train_idx]
+        val_embeddings = embeddings[val_idx]
+        val_labels = labels[val_idx]
 
-        num_labels = len(set(labels))
-        print(f"number_classes: {num_labels}")
-
-        train_dataset = EmbeddingDataset(train_texts, train_labels)
-        val_dataset = EmbeddingDataset(val_texts, val_labels)
+        train_dataset = EmbeddingDataset(train_embeddings, train_labels)
+        val_dataset = EmbeddingDataset(val_embeddings, val_labels)
 
         train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
         val_loader = DataLoader(val_dataset, batch_size=batch_size)
 
-        embedding_dim = sentence_embeddings.shape[1]  # usually 768
-        num_labels = len(set(labels_id))
-
         model = EmbeddingClassifier(embedding_dim=embedding_dim, num_labels=num_labels)
-        model.to(device)
-        # model = RobertaForSequenceClassification.from_pretrained(
-        #     "nanda-rani/TTPXHunter",
-        #     num_labels=num_labels,
-        #     hidden_dropout_prob=0.3,  # Increased dropout
-        #     attention_probs_dropout_prob=0.3,
-        #     ignore_mismatched_sizes=True
-        # )
         model.to(device)
 
         optimizer = AdamW(model.parameters(), lr=learning_rate, weight_decay=0.01)
-        # Total number of training steps
-        total_steps = len(train_loader) * epochs  # total batches × epochs
 
-        # Set warmup steps (usually 10% of total steps)
-        warmup_steps = int(0.1 * total_steps)
-
-        # Create Warmup + CosineAnnealing Scheduler
         scheduler = get_cosine_schedule_with_warmup(
             optimizer,
-            num_warmup_steps=warmup_steps,
-            num_training_steps=total_steps
+            num_warmup_steps=int(0.1 * len(train_loader) * epochs),
+            num_training_steps=len(train_loader) * epochs
         )
 
-        # Learning rate scheduler: ReduceLROnPlateau
-        # scheduler = CosineAnnealingWarmRestarts(
-        #     optimizer,
-        #     T_0=5,  # Number of epochs before first restart (you can tune)
-        #     T_mult=2,  # Multiplying factor
-        #     eta_min=1e-6  # Minimum learning rate
-        # )
-
-        fold_history = {"train_loss": [], "val_loss": [], "accuracy": [], "precision": [], "recall": [], "f1": [],
-                        "epoch_times": []}
+        fold_history = {
+            "train_loss": [],
+            "val_loss": [],
+            "accuracy": [],
+            "precision": [],
+            "recall": [],
+            "f1": [],
+            "epoch_times": []
+        }
 
         best_val_f1 = 0
         best_model_state = None
         early_stopping_patience = 5
         no_improve_epochs = 0
 
-        # Loss function (with optional class weights)
-        class_counts = np.bincount(train_labels, minlength=num_labels)
-        class_weights = torch.tensor(len(train_labels) / (num_labels * class_counts + 1e-9), dtype=torch.float32).to(
-            device)
-        loss_fn = torch.nn.CrossEntropyLoss(weight=class_weights)
+        loss_fn = torch.nn.CrossEntropyLoss()
 
         for epoch in range(epochs):
             epoch_start_time = time.time()
             print(f"\nEpoch {epoch + 1}/{epochs}")
 
-            # Training
             model.train()
             total_train_loss = 0
+
             for batch in tqdm(train_loader, desc="Training"):
-                batch = {k: v.to(device) for k, v in batch.items()}
-                outputs = model(inputs_embeds=batch["embedding"].to(device))
-                logits = outputs.logits
-                loss = loss_fn(logits, batch["labels"])
+                batch_embeddings = batch["embedding"].to(device)
+                batch_labels = batch["labels"].to(device)
+
+                logits = model(batch_embeddings)
+                loss = loss_fn(logits, batch_labels)
 
                 loss.backward()
                 torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
@@ -382,7 +386,7 @@ def cross_validate(texts, labels, k=5, epochs=30, batch_size=16, learning_rate=5
 
             avg_train_loss = total_train_loss / len(train_loader)
 
-            val_loss, acc, precision, recall, f1, total_fp = evaluate_model(model, val_loader, loss_fn)
+            val_loss, acc, precision, recall, f1, total_fp = evaluate_model_embeddings(model, val_loader, loss_fn)
 
             fold_history["train_loss"].append(avg_train_loss)
             fold_history["val_loss"].append(val_loss)
@@ -417,7 +421,7 @@ def cross_validate(texts, labels, k=5, epochs=30, batch_size=16, learning_rate=5
                 break
 
         # Save best model
-        fold_dir = f"saved_models/fold_{fold}"
+        fold_dir = f"saved_embedding_models/fold_{fold}"
         os.makedirs(fold_dir, exist_ok=True)
         torch.save(best_model_state, os.path.join(fold_dir, "model.pt"))
 
@@ -427,6 +431,7 @@ def cross_validate(texts, labels, k=5, epochs=30, batch_size=16, learning_rate=5
         fold_metrics.append(best_model_state["metrics"])
 
     return fold_results, fold_times, fold_metrics, training_history
+
 
 
 # Main execution
@@ -535,13 +540,10 @@ if __name__ == "__main__":
 
     # Run cross-validation
     print(f"\nStarting {params['k']}-fold cross-validation with {params['epochs']} epochs using RoBERTa-base...")
-    results, fold_times, fold_metrics, training_history = cross_validate(
-        sentences,
-        labels_id,
-        k=params["k"],
-        epochs=params["epochs"],
-        batch_size=params["batch_size"],
-        learning_rate=params["learning_rate"]
+    results, fold_times, fold_metrics, training_history = cross_validate_embeddings(
+        embeddings=sentence_embeddings_resampled,
+        labels=labels_resampled,
+        k=5, epochs=30, batch_size=32, learning_rate=5e-5
     )
 
     # Calculate total time
