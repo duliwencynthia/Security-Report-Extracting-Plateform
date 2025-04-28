@@ -472,6 +472,7 @@ if __name__ == "__main__":
     # Convert labels to IDs
     labels_id = []
     for lb in labels:
+        print(lb)
         labels_id.append(labels_dic[lb])
 
     #print("number of labels:", len(labels_id))
