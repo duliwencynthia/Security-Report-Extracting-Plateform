@@ -100,7 +100,7 @@ class RandomProjectionSynthesizer:
         self.labels = labels
         self.min_samples = min_samples
         self.synthetic_multiplier = synthetic_multiplier
-        self.vectorizer = TfidfVectorizer(max_features=3000)  # Fast lightweight representation
+        self.vectorizer = TfidfVectorizer(max_features=500)  # Fast lightweight representation
 
     def find_farthest_points(self, X):
         sims = cosine_similarity(X)
@@ -145,13 +145,14 @@ class RandomProjectionSynthesizer:
                 labels_label = [self.labels[i] for i in indices]
 
                 # Recursively split until small clusters
-                queue = [(X_label, texts_label, labels_label)]
+                queue = [(X_label, texts_label, labels_label, 0)]
+                max_depth = 5
                 while queue:
-                    X_c, texts_c, labels_c = queue.pop(0)
-                    if len(texts_c) ==0:
-                        continue
-                    elif len(texts_c) <= 5:
-                        # Mutate within small cluster
+                    X_c, texts_c, labels_c, depth = queue.pop(0)
+                    if len(texts_c) == 0:
+                        continue  # Skip empty clusters
+                    elif len(texts_c) <= 5 or depth >= max_depth:
+                        # If cluster is very small OR max depth reached, mutate
                         for _ in range(self.synthetic_multiplier):
                             anchor = random.choice(texts_c)
                             new_text = self.mutate_text(anchor)
@@ -159,8 +160,8 @@ class RandomProjectionSynthesizer:
                             labels_new.append(label)
                     else:
                         left, right = self.split(X_c, texts_c, labels_c)
-                        queue.append(left)
-                        queue.append(right)
+                        queue.append((left[0], left[1], left[2], depth + 1))
+                        queue.append((right[0], right[1], right[2], depth + 1))
 
         print(f"Original samples: {len(self.texts)}, After oversampling: {len(texts_new)}")
         return texts_new, labels_new
@@ -308,7 +309,7 @@ def cross_validate(texts, labels, k=5, epochs=30, batch_size=16, learning_rate=5
 
         train_texts = [texts[i] for i in train_idx]
         train_labels = [labels[i] for i in train_idx]
-        synthesizer = RandomProjectionSynthesizer(train_texts, train_labels, min_samples=100)
+        synthesizer = RandomProjectionSynthesizer(train_texts, train_labels, min_samples=100, synthetic_multiplier=4)
         train_texts, train_labels = synthesizer.oversample()
         val_texts = [texts[i] for i in val_idx]
         val_labels = [labels[i] for i in val_idx]
