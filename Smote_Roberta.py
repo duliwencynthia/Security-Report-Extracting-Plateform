@@ -309,7 +309,7 @@ def apply_smote(embeddings, labels):
     return torch.tensor(embeddings_resampled), torch.tensor(labels_resampled)
 
 # K-Fold Cross Validation with time tracking and learning rate scheduler
-def cross_validate_embeddings(embeddings, labels, k=5, epochs=30, batch_size=32, learning_rate=5e-4):
+def cross_validate_embeddings(embeddings, labels, k=5, epochs=20, batch_size=32, learning_rate=5e-4):
     kfold = KFold(n_splits=k, shuffle=True, random_state=42)
     fold_results = []
     fold_times = []
@@ -543,7 +543,7 @@ if __name__ == "__main__":
     results, fold_times, fold_metrics, training_history = cross_validate_embeddings(
         embeddings=sentence_embeddings_resampled,
         labels=labels_resampled,
-        k=5, epochs=30, batch_size=32, learning_rate=5e-5
+        k=5, epochs=20, batch_size=32, learning_rate=5e-5
     )
 
     # Calculate total time
