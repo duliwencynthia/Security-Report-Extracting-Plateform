@@ -16,11 +16,18 @@ import ast
 import os
 from collections import Counter
 from transformers import get_cosine_schedule_with_warmup
-import timedelta
+import torch.nn.functional as F
+from torch.optim.lr_scheduler import  CosineAnnealingWarmRestarts
+from transformers import RobertaConfig, RobertaModel
+import json
+import seaborn as sns
+import matplotlib.pyplot as plt
+from datetime import timedelta
+import torch.backends.cudnn as cudnn
 
-# cudnn.benchmark = False
-# cudnn.deterministic = True
-# torch.cuda.empty_cache()
+cudnn.benchmark = False
+cudnn.deterministic = True
+torch.cuda.empty_cache()
 
 os.environ["CUDA_LAUNCH_BLOCKING"] = "1"
 
