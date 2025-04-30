@@ -7,3 +7,4 @@ tqdm==4.66.2
 seaborn
 matplotlib
 imblearn
+timedelta

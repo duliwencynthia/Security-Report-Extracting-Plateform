@@ -293,7 +293,7 @@ def save_model(model, tokenizer, fold, metrics, output_dir="saved_models"):
 
 
 # K-Fold Cross Validation with time tracking and learning rate scheduler
-def cross_validate(texts, labels, k=5, epochs=30, batch_size=16, learning_rate=5e-5):
+def cross_validate(texts, labels, k=5, epochs=25, batch_size=16, learning_rate=5e-5):
     kfold = KFold(n_splits=k, shuffle=True, random_state=42)
     fold_results = []
     fold_times = []
